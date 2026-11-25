@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+
+# Next.js / Static export
+.next/
+out/
+next-env.d.ts
+
+# Serwist generated SW
+public/sw.js
+public/sw.js.map
+public/swe-worker-*.js
+
+# Backend build
+backend/dist/
+
+# Environment & logs
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
