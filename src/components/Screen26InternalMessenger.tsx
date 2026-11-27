@@ -10,8 +10,11 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import { AppShell, ProposedBanner } from "@/components/design-system";
+import { AppShell, NoAccessBanner, ProposedBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 type AlertColor = "gold" | "green" | "red" | "blue";
 
@@ -23,6 +26,7 @@ const COLOR_OPTIONS: { id: AlertColor; label: string; dot: string }[] = [
 ];
 
 export function Screen26InternalMessenger() {
+  const { accessDenied } = useEndpointAccess("/admin/notifications");
   const [sendToAll, setSendToAll] = useState(true);
   const [messageType, setMessageType] = useState("پیام عادی");
   const [alertColor, setAlertColor] = useState<AlertColor>("gold");
@@ -30,6 +34,49 @@ export function Screen26InternalMessenger() {
   const [body, setBody] = useState(
     "احتراماً به اطلاع کلیه همکاران و خریداران محترم می‌رساند، با توجه به تعطیلات پایان هفته، تسویه معاملات نقد فردا تا ساعت ۱۳:۰۰ انجام خواهد شد."
   );
+  const [sentNotice, setSentNotice] = useState<string | null>(null);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
+
+  const handleSend = async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) {
+      setSentNotice("پیام داخلی ثبت نمایشی شد.");
+      return;
+    }
+    const res = await fetch(`${API_BASE}/admin/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        title,
+        body,
+        category: "NORMAL",
+        priorityColor: alertColor.toUpperCase(),
+        audience: sendToAll ? "ALL" : "ONLINE_ONLY",
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setSentNotice(`پیام داخلی برای ${data.recipientCount} کاربر ارسال شد.`);
+    }
+  };
 
   return (
     <AppShell
@@ -194,12 +241,19 @@ export function Screen26InternalMessenger() {
             </button>
             <button
               type="button"
+              onClick={() => void handleSend()}
               className="flex items-center justify-center gap-1.5 rounded-xl bg-gold py-2.5 text-xs font-extrabold text-bg-primary hover:opacity-90 cursor-pointer"
             >
               <Send className="h-3.5 w-3.5" aria-hidden="true" />
               <span>ارسال</span>
             </button>
           </div>
+
+          {sentNotice ? (
+            <p className="rounded-xl bg-buy-soft px-3 py-2 text-center text-xs font-bold text-buy">
+              {sentNotice}
+            </p>
+          ) : null}
         </section>
 
         {/* Active System Announcements */}

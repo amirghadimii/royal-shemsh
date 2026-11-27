@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Bell,
   Check,
@@ -11,8 +11,20 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface ArchiveNotificationItem {
+  id: string;
+  title: string;
+  body: string;
+  category: string;
+  createdAt: string;
+  user?: { fullName: string } | null;
+}
 
 const AUDIENCE_OPTIONS = [
   "ارسال برای همه",
@@ -47,6 +59,7 @@ const SWATCHES = [
 ];
 
 export function Screen31Messenger() {
+  const { accessDenied } = useEndpointAccess("/admin/notifications");
   const [onlineOnly, setOnlineOnly] = useState(true);
   const [audience, setAudience] = useState(AUDIENCE_OPTIONS[0]);
   const [msgType, setMsgType] = useState(MSG_TYPE_OPTIONS[0]);
@@ -61,6 +74,120 @@ export function Screen31Messenger() {
   const [archiveUser, setArchiveUser] = useState(ARCHIVE_USERS[0]);
   const [archiveType, setArchiveType] = useState(ARCHIVE_TYPES[0]);
   const [archiveStatus, setArchiveStatus] = useState("همه");
+  const [notifications, setNotifications] = useState<ArchiveNotificationItem[]>([]);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  const loadArchive = useCallback(async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    const statusParam =
+      archiveStatus === "تایید شده"
+        ? "approved"
+        : archiveStatus === "رد شده"
+          ? "rejected"
+          : archiveStatus === "پذیرفته شده"
+            ? "accepted"
+            : "all";
+    const typeParam =
+      archiveType === "پیام عادی" ? "NORMAL" : "";
+
+    const qs = new URLSearchParams({
+      status: statusParam,
+      ...(typeParam ? { type: typeParam } : {}),
+    });
+
+    const res = await fetch(`${API_BASE}/admin/notifications?${qs.toString()}`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.notifications)) {
+        setNotifications(data.notifications);
+      }
+    }
+  }, [accessDenied, archiveStatus, archiveType]);
+
+  useEffect(() => {
+    void loadArchive();
+  }, [loadArchive]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
+
+  const handleSendMessage = async () => {
+    setActionNotice(null);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) {
+      setActionNotice("پیام نمونه ارسال نمایشی شد.");
+      return;
+    }
+    const category =
+      msgType === "بخشنامه رسمی"
+        ? "OFFICIAL_CIRCULAR"
+        : msgType === "توقف موقت نماد"
+          ? "SYMBOL_HALT"
+          : msgType === "هشدار نوسان شدید"
+            ? "VOLATILITY_ALERT"
+            : "NORMAL";
+    const res = await fetch(`${API_BASE}/admin/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      credentials: "include",
+      body: JSON.stringify({
+        title,
+        body,
+        category,
+        priorityColor: swatch.toUpperCase(),
+        audience: onlineOnly ? "ONLINE_ONLY" : "ALL",
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setActionNotice(`پیام برای ${data.recipientCount} کاربر ارسال شد.`);
+      await loadArchive();
+    }
+  };
+
+  const handleEditLastNormal = async () => {
+    setActionNotice(null);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    const res = await fetch(`${API_BASE}/admin/messages/last-normal`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      credentials: "include",
+      body: JSON.stringify({ title, body }),
+    });
+    if (res.ok) {
+      setActionNotice("آخرین پیام عادی با موفقیت ویرایش شد.");
+    }
+  };
 
   const activeSwatch =
     SWATCHES.find((s) => s.id === swatch) ?? SWATCHES[0];
@@ -79,6 +206,7 @@ export function Screen31Messenger() {
           </h2>
           <button
             type="button"
+            onClick={() => void handleEditLastNormal()}
             className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-gold px-3 py-2 text-[10px] font-extrabold text-bg-primary hover:opacity-90 cursor-pointer"
           >
             <Edit3 className="h-3 w-3" aria-hidden="true" />
@@ -237,12 +365,19 @@ export function Screen31Messenger() {
             </button>
             <button
               type="button"
+              onClick={() => void handleSendMessage()}
               className="flex items-center justify-center gap-1.5 rounded-xl bg-buy py-2.5 text-xs font-extrabold text-white hover:opacity-90 cursor-pointer"
             >
               <Send className="h-3.5 w-3.5" aria-hidden="true" />
               <span>ارسال</span>
             </button>
           </div>
+
+          {actionNotice ? (
+            <p className="rounded-xl bg-buy-soft px-3 py-2 text-center text-xs font-bold text-buy">
+              {actionNotice}
+            </p>
+          ) : null}
         </section>
 
         {/* Pinned Card */}
@@ -369,7 +504,23 @@ export function Screen31Messenger() {
             ))}
           </div>
 
-          {/* Empty State */}
+          {/* Notifications List or Empty State */}
+          {notifications.length > 0 ? (
+            <div className="space-y-2">
+              {notifications.slice(0, 15).map((n) => (
+                <article
+                  key={n.id}
+                  className="rounded-xl border border-border-subtle bg-bg-primary/70 p-3 space-y-1 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-text-primary">{n.title}</span>
+                    <span className="text-[10px] text-gold">{n.category}</span>
+                  </div>
+                  <p className="text-[11px] text-text-secondary">{n.body}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
           <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border-subtle bg-bg-primary/60 px-4 py-7 text-center">
             <Inbox className="h-6 w-6 text-text-muted" aria-hidden="true" />
             <p className="mt-2 text-xs font-bold text-text-primary">
@@ -381,12 +532,14 @@ export function Screen31Messenger() {
             </p>
             <button
               type="button"
+              onClick={() => void loadArchive()}
               className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-gold/35 bg-gold-soft px-3.5 py-2 text-[11px] font-bold text-gold hover:bg-gold hover:text-bg-primary cursor-pointer"
             >
               <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
               <span>بارگذاری مجدد اطلاعات</span>
             </button>
           </div>
+          )}
         </section>
       </div>
     </AppShell>

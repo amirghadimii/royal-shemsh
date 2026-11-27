@@ -2,38 +2,93 @@
 
 import { useEffect, useState } from "react";
 import { AlertCircle, Check, Clock, ShieldCheck, X } from "lucide-react";
-import { toPersianDigits } from "@/lib/format";
+import { formatFaNumber, toPersianDigits } from "@/lib/format";
+import type { SocketNewOrder } from "@/lib/useBoardSocket";
 
 interface Screen16ApprovalModalProps {
   open: boolean;
   onClose: () => void;
+  order?: SocketNewOrder | null;
 }
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 const DURATION = 60;
 
 export function Screen16ApprovalModal({
   open,
   onClose,
+  order,
 }: Screen16ApprovalModalProps) {
   const [secondsLeft, setSecondsLeft] = useState(DURATION);
   const [decision, setDecision] = useState<"approved" | "rejected" | null>(
     null
   );
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setSecondsLeft(DURATION);
-    setDecision(null);
+    const initialLeft = order?.expiresAt
+      ? Math.max(
+          0,
+          Math.floor((new Date(order.expiresAt).getTime() - Date.now()) / 1000)
+        )
+      : DURATION;
+    setSecondsLeft(initialLeft);
+    setDecision(
+      order?.status === "APPROVED"
+        ? "approved"
+        : order?.status === "REJECTED"
+          ? "rejected"
+          : null
+    );
+    setErrorMsg(null);
 
     const timer = setInterval(() => {
       setSecondsLeft((prev) => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
     return () => clearInterval(timer);
-  }, [open]);
+  }, [open, order?.id, order?.expiresAt, order?.status]);
 
   if (!open) return null;
 
-  const isExpired = secondsLeft === 0;
+  const isExpired = secondsLeft === 0 || order?.status === "EXPIRED";
+
+  const handleDecision = async (action: "approve" | "reject") => {
+    if (!order?.id) {
+      setDecision(action === "approve" ? "approved" : "rejected");
+      return;
+    }
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+
+    setSubmitting(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/orders/${order.id}/${action}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: action === "reject" ? JSON.stringify({ reason: "رد شده توسط مدیر" }) : undefined,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.message ?? "خطا در ثبت تصمیم سفارش");
+        return;
+      }
+      setDecision(action === "approve" ? "approved" : "rejected");
+    } catch {
+      setErrorMsg("خطا در ارتباط با سرور");
+    } finally {
+      setSubmitting(false);
+    }
+  };
   const ringRadius = 22;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset =
@@ -115,36 +170,48 @@ export function Screen16ApprovalModal({
         <dl className="space-y-2 rounded-2xl border border-border-subtle bg-bg-primary/65 p-3 text-xs">
           <div className="flex items-center justify-between gap-2">
             <dt className="text-text-secondary">درخواست{"\u200c"}کننده معامله</dt>
-            <dd className="font-bold text-text-primary">کیارش پورسلیک</dd>
+            <dd className="font-bold text-text-primary">
+              {order ? order.userName : "کیارش پورسلیک"}
+            </dd>
           </div>
           <div className="flex items-center justify-between gap-2">
             <dt className="text-text-secondary">کد معاملاتی</dt>
             <dd dir="ltr" className="font-bold text-gold">
-              RS-8831
+              {order ? order.quoteCode : "RS-8831"}
             </dd>
           </div>
           <div className="flex items-center justify-between gap-2">
             <dt className="text-text-secondary">نوع معامله:</dt>
-            <dd className="rounded-md bg-buy-soft px-2 py-0.5 text-[11px] font-extrabold text-buy">
-              خرید قطعی
+            <dd
+              className={`rounded-md px-2 py-0.5 text-[11px] font-extrabold ${
+                order?.side === "SELL"
+                  ? "bg-sell-soft text-sell"
+                  : "bg-buy-soft text-buy"
+              }`}
+            >
+              {order?.side === "SELL" ? "فروش قطعی" : "خرید قطعی"}
             </dd>
           </div>
           <div className="flex items-center justify-between gap-2">
             <dt className="text-text-secondary">کالا:</dt>
             <dd className="font-bold text-text-primary">
-              نقد پس{"\u200c"}فردا (۲۴ عیار)
+              {order ? order.productName : "نقد پس\u200cفردا (۲۴ عیار)"}
             </dd>
           </div>
           <div className="flex items-center justify-between gap-2">
             <dt className="text-text-secondary">قیمت واحد مظنه:</dt>
             <dd className="tabular-nums-fa font-bold text-text-primary">
-              ۱۱۰,۱۴۵,۰۰۰ تومان
+              {order
+                ? `${formatFaNumber(Number(order.unitPrice))} تومان`
+                : "۱۱۰,۱۴۵,۰۰۰ تومان"}
             </dd>
           </div>
           <div className="flex items-center justify-between gap-2">
             <dt className="text-text-secondary">مقدار / وزن درخواست:</dt>
             <dd className="tabular-nums-fa font-bold text-text-primary">
-              ۲۵۰ گرم شمش استاندارد
+              {order
+                ? `${toPersianDigits(order.quantity)} ${order.unit}`
+                : "۲۵۰ گرم شمش استاندارد"}
             </dd>
           </div>
         </dl>
@@ -156,7 +223,9 @@ export function Screen16ApprovalModal({
             <span className="text-gold font-semibold">محاسبه برخط سیستم</span>
           </div>
           <p className="tabular-nums-fa mt-1 text-lg font-extrabold text-gold">
-            ۲۷,۵۳۶,۲۵۰,۰۰۰ تومان
+            {order
+              ? `${formatFaNumber(Number(order.totalAmount))} تومان`
+              : "۲۷,۵۳۶,۲۵۰,۰۰۰ تومان"}
           </p>
         </div>
 
@@ -180,21 +249,32 @@ export function Screen16ApprovalModal({
         <div className="grid grid-cols-2 gap-2.5">
           <button
             type="button"
-            onClick={() => setDecision("rejected")}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-sell/45 bg-sell-soft py-3 text-xs font-extrabold text-sell hover:bg-sell hover:text-white cursor-pointer"
+            disabled={submitting || isExpired || decision !== null}
+            onClick={() => void handleDecision("reject")}
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-sell/45 bg-sell-soft py-3 text-xs font-extrabold text-sell hover:bg-sell hover:text-white disabled:opacity-50 cursor-pointer"
           >
             <X className="h-4 w-4" aria-hidden="true" />
             <span>رد درخواست</span>
           </button>
           <button
             type="button"
-            onClick={() => setDecision("approved")}
-            className="flex items-center justify-center gap-1.5 rounded-xl bg-buy py-3 text-xs font-extrabold text-white hover:opacity-90 cursor-pointer"
+            disabled={submitting || isExpired || decision !== null}
+            onClick={() => void handleDecision("approve")}
+            className="flex items-center justify-center gap-1.5 rounded-xl bg-buy py-3 text-xs font-extrabold text-white hover:opacity-90 disabled:opacity-50 cursor-pointer"
           >
             <Check className="h-4 w-4" aria-hidden="true" />
             <span>تایید درخواست</span>
           </button>
         </div>
+
+        {errorMsg ? (
+          <p
+            role="alert"
+            className="rounded-xl bg-sell-soft px-3 py-2 text-center text-xs font-bold text-sell"
+          >
+            {errorMsg}
+          </p>
+        ) : null}
 
         {decision ? (
           <p
@@ -205,8 +285,8 @@ export function Screen16ApprovalModal({
             }`}
           >
             {decision === "approved"
-              ? "درخواست معامله تایید نمایشی شد."
-              : "درخواست معامله رد نمایشی شد."}
+              ? "درخواست معامله با موفقیت تایید شد."
+              : "درخواست معامله رد شد."}
           </p>
         ) : null}
 

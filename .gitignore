@@ -18,6 +18,13 @@ backend/dist/
 # Environment & logs
 .env
 .env.*
+backend/.env
+backend/.env.*
 !.env.example
+!backend/.env.example
 *.log
 npm-debug.log*
+
+# Staging backups & uploads
+backend/backups/
+backend/uploads/

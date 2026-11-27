@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   AlertCircle,
   Inbox,
@@ -12,6 +12,30 @@ import {
 import { AppShell } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
 import { formatFaNumber } from "@/lib/format";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface PreOrderProductOption {
+  id: string;
+  name: string;
+}
+
+interface PreOrderItem {
+  id: string;
+  side: "BUY" | "SELL";
+  targetPrice: string;
+  weightGrams: string;
+  totalAmount: string;
+  status: "ACTIVE" | "EXECUTED" | "CANCELLED" | "EXPIRED";
+  product: { id: string; name: string; unit: string };
+}
+
+const STATUS_LABEL: Record<PreOrderItem["status"], string> = {
+  ACTIVE: "فعال",
+  EXECUTED: "اجرا شده",
+  CANCELLED: "لغو شده",
+  EXPIRED: "منقضی",
+};
 
 type ConditionalSide = "buy" | "sell";
 type DateChip = "today" | "3days" | "7days" | "month";
@@ -54,12 +78,141 @@ export function Screen3Preorder() {
   const [topTab, setTopTab] = useState<"new" | "list">("new");
   const [side, setSide] = useState<ConditionalSide>("buy");
   const [symbol, setSymbol] = useState<string>(SYMBOL_OPTIONS[0]);
+  const [productOptions, setProductOptions] = useState<PreOrderProductOption[]>(
+    SYMBOL_OPTIONS.map((name) => ({ id: name, name }))
+  );
+  const [preOrders, setPreOrders] = useState<PreOrderItem[]>([]);
   const [targetPrice, setTargetPrice] = useState<number>(44_150_000);
   const [weight, setWeight] = useState<number>(10);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [dateChip, setDateChip] = useState<DateChip>("today");
   const [statusChip, setStatusChip] = useState<StatusChip>("all");
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const loadMyPreOrders = useCallback(async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    try {
+      const qs = new URLSearchParams({
+        range: dateChip,
+        status: statusChip,
+        ...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
+      });
+      const res = await fetch(`${API_BASE}/preorders/mine?${qs.toString()}`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.preOrders)) {
+          setPreOrders(data.preOrders);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [dateChip, statusChip, searchQuery]);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+
+    fetch(`${API_BASE}/board/products`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.products) && data.products.length > 0) {
+          const mapped = data.products.map(
+            (p: { id: string; name: string }) => ({ id: p.id, name: p.name })
+          );
+          setProductOptions(mapped);
+          setSymbol(mapped[0].id);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    void loadMyPreOrders();
+  }, [loadMyPreOrders]);
+
+  const handleSubmitPreOrder = async () => {
+    setErrorMsg(null);
+    setSubmittedMessage(null);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) {
+      setSubmittedMessage(
+        `پیش سفارش شرطی نمونه (${formatFaNumber(weight)} گرم) ثبت نمایشی شد.`
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/preorders`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          productId: symbol,
+          side: side.toUpperCase(),
+          targetPrice: String(targetPrice),
+          weightGrams: String(weight),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.message ?? "خطا در ثبت پیش‌سفارش");
+        return;
+      }
+      setSubmittedMessage(
+        `پیش‌سفارش ${data.preOrder.product.name} (${formatFaNumber(
+          Number(data.preOrder.weightGrams)
+        )} ${data.preOrder.product.unit}) با وضعیت فعال ثبت شد.`
+      );
+      await loadMyPreOrders();
+    } catch {
+      setErrorMsg("خطا در ارتباط با سرور");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelPreOrder = async (id: string) => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/preorders/${id}/cancel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+      if (res.ok) {
+        await loadMyPreOrders();
+      }
+    } catch {
+      // ignore
+    }
+  };
 
   const estimatedTotal = targetPrice * weight;
   const feeAmount = Math.round(estimatedTotal * 0.001);
@@ -107,7 +260,7 @@ export function Screen3Preorder() {
                 : "border border-border-subtle bg-bg-card text-text-primary hover:border-gold/40"
             }`}
           >
-            پیش{"\u200c"}سفارشات ۰
+            پیش{"\u200c"}سفارشات {formatFaNumber(preOrders.length)}
           </button>
         </div>
 
@@ -154,9 +307,9 @@ export function Screen3Preorder() {
             onChange={(e) => setSymbol(e.target.value)}
             className="w-full rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5 text-xs font-semibold text-text-primary focus:border-gold focus:outline-none"
           >
-            {SYMBOL_OPTIONS.map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
+            {productOptions.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.name}
               </option>
             ))}
           </select>
@@ -305,15 +458,21 @@ export function Screen3Preorder() {
           {/* Gold Submit */}
           <button
             type="button"
-            onClick={() =>
-              setSubmittedMessage(
-                `پیش سفارش شرطی نمونه (${formatFaNumber(weight)} گرم) ثبت نمایشی شد.`
-              )
-            }
-            className="w-full rounded-xl bg-gold py-3 text-xs font-extrabold text-bg-primary transition-opacity hover:opacity-90 cursor-pointer"
+            disabled={submitting}
+            onClick={() => void handleSubmitPreOrder()}
+            className="w-full rounded-xl bg-gold py-3 text-xs font-extrabold text-bg-primary transition-opacity hover:opacity-90 disabled:opacity-50 cursor-pointer"
           >
-            ثبت پیش سفارش شرطی
+            {submitting ? "در حال ثبت..." : "ثبت پیش سفارش شرطی"}
           </button>
+
+          {errorMsg ? (
+            <p
+              role="alert"
+              className="rounded-xl border border-sell/45 bg-sell-soft px-3 py-2 text-center text-xs font-bold text-sell"
+            >
+              {errorMsg}
+            </p>
+          ) : null}
 
           {submittedMessage ? (
             <p className="rounded-xl border border-buy/35 bg-buy-soft px-3 py-2 text-center text-xs text-buy">
@@ -384,25 +543,62 @@ export function Screen3Preorder() {
             ))}
           </div>
 
-          {/* Empty State */}
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border-subtle bg-bg-primary/60 px-4 py-6 text-center">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-card text-text-muted">
-              <Inbox className="h-5 w-5" aria-hidden="true" />
+          {/* Pre-orders List or Empty State */}
+          {preOrders.length > 0 ? (
+            <div className="space-y-2.5">
+              {preOrders.map((po) => (
+                <article
+                  key={po.id}
+                  className="rounded-2xl border border-border-subtle bg-bg-primary/70 p-3 space-y-2 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-extrabold text-text-primary">
+                      {po.product.name} ({po.side === "BUY" ? "خرید" : "فروش"})
+                    </span>
+                    <span className="rounded-md border border-gold/30 bg-gold-soft px-2 py-0.5 text-[10px] font-bold text-gold">
+                      {STATUS_LABEL[po.status]}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-text-secondary">
+                    <span className="tabular-nums-fa">
+                      قیمت هدف: {formatFaNumber(Number(po.targetPrice))} تومان
+                    </span>
+                    <span className="tabular-nums-fa">
+                      مقدار: {formatFaNumber(Number(po.weightGrams))} {po.product.unit}
+                    </span>
+                  </div>
+                  {po.status === "ACTIVE" ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelPreOrder(po.id)}
+                      className="w-full rounded-xl border border-sell/45 bg-sell-soft py-1.5 text-[11px] font-bold text-sell cursor-pointer"
+                    >
+                      لغو پیش‌سفارش
+                    </button>
+                  ) : null}
+                </article>
+              ))}
             </div>
-            <p className="mt-2.5 text-xs font-bold text-text-primary">
-              هیچ داده{"\u200c"}ای یافت نشد
-            </p>
-            <p className="mt-1 text-[11px] text-text-secondary">
-              در حال حاضر هیچ پیش{"\u200c"}سفارشی با فیلترهای انتخابی موجود نیست.
-            </p>
-            <button
-              type="button"
-              onClick={() => setTopTab("new")}
-              className="mt-3 rounded-xl bg-gold px-4 py-2 text-xs font-extrabold text-bg-primary transition-opacity hover:opacity-90 cursor-pointer"
-            >
-              ثبت سفارش شرطی جدید
-            </button>
-          </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border-subtle bg-bg-primary/60 px-4 py-6 text-center">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border-subtle bg-bg-card text-text-muted">
+                <Inbox className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <p className="mt-2.5 text-xs font-bold text-text-primary">
+                هیچ داده{"\u200c"}ای یافت نشد
+              </p>
+              <p className="mt-1 text-[11px] text-text-secondary">
+                در حال حاضر هیچ پیش{"\u200c"}سفارشی با فیلترهای انتخابی موجود نیست.
+              </p>
+              <button
+                type="button"
+                onClick={() => setTopTab("new")}
+                className="mt-3 rounded-xl bg-gold px-4 py-2 text-xs font-extrabold text-bg-primary transition-opacity hover:opacity-90 cursor-pointer"
+              >
+                ثبت سفارش شرطی جدید
+              </button>
+            </div>
+          )}
         </section>
 
         {/* Footer */}

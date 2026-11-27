@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Calendar,
   CheckCircle2,
@@ -10,13 +10,66 @@ import {
   ShieldCheck,
   TrendingUp,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface ProfitLossRow {
+  productId: string;
+  name: string;
+  unit: string;
+  buyTotalToman: string;
+  sellTotalToman: string;
+  netWeight: string;
+  totalPlToman: string;
+}
 
 export function Screen11ProfitLoss() {
+  const { accessDenied } = useEndpointAccess("/admin/reports/profit-loss");
   const [fromDate, setFromDate] = useState("۱۴۰۵/۰۹/۰۴");
   const [toDate, setToDate] = useState("۱۴۰۵/۰۹/۰۴");
   const [notice, setNotice] = useState<string | null>(null);
+  const [plRows, setPlRows] = useState<ProfitLossRow[]>([]);
+  const [grandTotalPl, setGrandTotalPl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    fetch(`${API_BASE}/admin/reports/profit-loss?days=30`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.rows)) setPlRows(data.rows);
+        if (data?.grandTotalPlToman !== undefined) {
+          setGrandTotalPl(String(data.grandTotalPlToman));
+        }
+      })
+      .catch(() => {});
+  }, [accessDenied]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
+
+  const totalSell = plRows.reduce((s, r) => s + Number(r.sellTotalToman), 0);
+  const totalBuy = plRows.reduce((s, r) => s + Number(r.buyTotalToman), 0);
 
   return (
     <AppShell
@@ -157,7 +210,9 @@ export function Screen11ProfitLoss() {
                 </p>
               </div>
               <span className="tabular-nums-fa font-bold text-text-primary">
-                ۱,۸۴۲,۵۰۰,۰۰۰ تومان
+                {grandTotalPl !== null
+                  ? `${formatFaNumber(totalSell)} تومان`
+                  : "۱,۸۴۲,۵۰۰,۰۰۰ تومان"}
               </span>
             </div>
 
@@ -169,7 +224,9 @@ export function Screen11ProfitLoss() {
                 </p>
               </div>
               <span className="tabular-nums-fa font-bold text-text-primary">
-                ۱,۷۱۰,۲۰۰,۰۰۰ تومان
+                {grandTotalPl !== null
+                  ? `${formatFaNumber(totalBuy)} تومان`
+                  : "۱,۷۱۰,۲۰۰,۰۰۰ تومان"}
               </span>
             </div>
 

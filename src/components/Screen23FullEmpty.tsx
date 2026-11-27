@@ -1,9 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Calendar, FileSpreadsheet } from "lucide-react";
-import { AppShell, ProposedBanner } from "@/components/design-system";
+import { AppShell, NoAccessBanner, ProposedBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 type RangeId = "today" | "yesterday" | "week";
 
@@ -76,7 +80,70 @@ const ROWS: FullEmptyRow[] = [
 ];
 
 export function Screen23FullEmpty() {
+  const { accessDenied } = useEndpointAccess("/admin/reports/order-balance");
   const [range, setRange] = useState<RangeId>("today");
+  const [rows, setRows] = useState<FullEmptyRow[]>(ROWS);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    const now = new Date();
+    const offsetDays = range === "yesterday" ? 1 : range === "week" ? 7 : 0;
+    const d = new Date(now.getTime() - offsetDays * 86_400_000);
+    const dateStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Tehran",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+
+    fetch(`${API_BASE}/admin/reports/order-balance?date=${dateStr}`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!Array.isArray(data?.rows)) return;
+        setRows(
+          data.rows.slice(0, 7).map(
+            (r: {
+              name: string;
+              unit: string;
+              buyWeight: string;
+              sellWeight: string;
+              netWeight: string;
+            }) => {
+              const netNum = Number(r.netWeight);
+              return {
+                name: r.name,
+                sub: r.unit,
+                full: `${formatFaNumber(Number(r.buyWeight))} ${r.unit}`,
+                empty: `${formatFaNumber(Number(r.sellWeight))} ${r.unit}`,
+                status: netNum === 0 ? "تسویه کامل" : "هماهنگ",
+                tone: netNum === 0 ? "gold" : "buy",
+              };
+            }
+          )
+        );
+      })
+      .catch(() => {});
+  }, [accessDenied, range]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -148,7 +215,7 @@ export function Screen23FullEmpty() {
           </div>
 
           <div className="divide-y divide-border-subtle text-[11px]">
-            {ROWS.map((row) => {
+            {rows.map((row) => {
               const badgeClass =
                 row.tone === "gold"
                   ? "bg-gold-soft text-gold border-gold/30"

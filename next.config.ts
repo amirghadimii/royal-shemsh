@@ -11,7 +11,8 @@ const withSerwist = withSerwistInit({
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  output: "export",
+  turbopack: {},
+  output: isProd ? "export" : undefined,
   basePath: isProd ? "/royal-shemsh" : undefined,
   images: {
     unoptimized: true,

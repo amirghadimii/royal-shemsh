@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Banknote,
@@ -11,8 +11,12 @@ import {
   SlidersHorizontal,
   Tag,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 type PositionFilter = "all" | "Long" | "Short";
 
@@ -117,11 +121,61 @@ const POSITIONS: PositionItem[] = [
 ];
 
 export function Screen10AssetDashboard() {
+  const { accessDenied } = useEndpointAccess("/admin/reports/asset-dashboard");
   const [filter, setFilter] = useState<PositionFilter>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [positions, setPositions] = useState<PositionItem[]>(POSITIONS);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    fetch(`${API_BASE}/admin/reports/asset-dashboard`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!Array.isArray(data?.rows)) return;
+        setPositions(
+          data.rows.slice(0, 7).map(
+            (r: {
+              productId: string;
+              name: string;
+              unit: string;
+              netPosition: string;
+              valuationPrice: string;
+              floatingPlToman: string;
+              realisedPlToman: string;
+            }) => {
+              const netNum = Number(r.netPosition);
+              const valNum = Number(r.valuationPrice);
+              const floatNum = Number(r.floatingPlToman);
+              const volNum = Math.abs(Math.round(netNum * valNum));
+              return {
+                id: r.productId,
+                name: r.name,
+                subtitle: r.unit,
+                totalVolume: formatFaNumber(volNum),
+                direction: netNum >= 0 ? "Long" : "Short",
+                amount: `${formatFaNumber(Math.abs(netNum))}${r.unit}`,
+                currentPrice: formatFaNumber(valNum),
+                estimatedPL: `${floatNum > 0 ? "+" : ""}${formatFaNumber(floatNum)}`,
+                avgLabel: `سود/زیان محقق‌شده: ${formatFaNumber(Number(r.realisedPlToman))} ت`,
+                icon: r.unit === "عدد" ? Coins : Gem,
+              };
+            }
+          )
+        );
+      })
+      .catch(() => {});
+  }, [accessDenied]);
 
   const filteredPositions = useMemo(() => {
-    return POSITIONS.filter((pos) => {
+    return positions.filter((pos) => {
       if (filter !== "all" && pos.direction !== filter) return false;
       if (searchQuery.trim() !== "") {
         const q = searchQuery.trim();
@@ -129,7 +183,19 @@ export function Screen10AssetDashboard() {
       }
       return true;
     });
-  }, [filter, searchQuery]);
+  }, [positions, filter, searchQuery]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell

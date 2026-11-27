@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bell,
   CheckCircle2,
@@ -12,9 +12,12 @@ import {
   Save,
   ShieldCheck,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
 import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 const HOME_GOLD_OPTIONS = [
   {
@@ -35,12 +38,100 @@ const HOME_GOLD_OPTIONS = [
 ];
 
 export function Screen29Settings() {
+  const { accessDenied } = useEndpointAccess("/admin/settings");
   const [responseSeconds, setResponseSeconds] = useState(60);
   const [homeGoldMode, setHomeGoldMode] = useState("1");
+  const [tradingStopped, setTradingStopped] = useState(false);
   const [noticeText, setNoticeText] = useState(
     "همکار گرامی؛ نقد فردا و مسکوکات روز چهارشنبه، نقد پس‌فردا روز شنبه تسویه می‌شود. مهلت ارسال شماره حساب بانکی حداکثر تا ساعت ۱۰:۰۰ می‌باشد."
   );
-  const [savedNotice, setSavedNotice] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    fetch(`${API_BASE}/admin/settings`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const cfg = data?.config;
+        if (!cfg) return;
+        if (typeof cfg.responseTimeoutSeconds === "number") {
+          setResponseSeconds(cfg.responseTimeoutSeconds);
+        }
+        if (typeof cfg.homeGoldMode === "string") {
+          setHomeGoldMode(cfg.homeGoldMode);
+        }
+        if (typeof cfg.portalNoticeText === "string") {
+          setNoticeText(cfg.portalNoticeText);
+        }
+        if (typeof cfg.tradingStopped === "boolean") {
+          setTradingStopped(cfg.tradingStopped);
+        }
+      })
+      .catch(() => {});
+  }, [accessDenied]);
+
+  const handleSave = async () => {
+    setSavedNotice(null);
+    setErrorMsg(null);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) {
+      setSavedNotice("تنظیمات با موفقیت ذخیره نمایشی شد.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/admin/settings`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          responseTimeoutSeconds: responseSeconds,
+          homeGoldMode,
+          portalNoticeText: noticeText,
+          tradingStopped,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.message ?? "خطا در ذخیره تنظیمات");
+        return;
+      }
+      setSavedNotice("تنظیمات سامانه با موفقیت ذخیره شد.");
+    } catch {
+      setErrorMsg("خطا در ارتباط با سرور");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   const selectedMode =
     HOME_GOLD_OPTIONS.find((o) => o.value === homeGoldMode) ??
@@ -214,20 +305,51 @@ export function Screen29Settings() {
           </div>
         </section>
 
+        {/* Manager Trading Stop Toggle */}
+        <section className="rounded-2xl border border-border-subtle bg-bg-card p-4">
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <div>
+              <span className="block text-xs font-extrabold text-text-primary">
+                توقف معاملات توسط مدیر
+              </span>
+              <span className="mt-0.5 block text-[10px] text-text-secondary">
+                در صورت فعال بودن، بنر توقف معاملات در تابلوی قیمت نمایش داده می‌شود
+              </span>
+            </div>
+            <input
+              id="s29-trading-stopped"
+              type="checkbox"
+              checked={tradingStopped}
+              onChange={(e) => setTradingStopped(e.target.checked)}
+              className="h-4 w-4 accent-[#EF4444]"
+            />
+          </label>
+        </section>
+
         {/* Save Button */}
         <button
           type="button"
-          onClick={() => setSavedNotice(true)}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gold py-3.5 text-sm font-extrabold text-bg-primary hover:opacity-90 cursor-pointer"
+          disabled={saving}
+          onClick={() => void handleSave()}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gold py-3.5 text-sm font-extrabold text-bg-primary hover:opacity-90 disabled:opacity-50 cursor-pointer"
         >
           <Save className="h-4 w-4" aria-hidden="true" />
-          <span>ذخیره تنظیمات</span>
+          <span>{saving ? "در حال ذخیره..." : "ذخیره تنظیمات"}</span>
         </button>
+
+        {errorMsg ? (
+          <p
+            role="alert"
+            className="rounded-xl border border-sell/45 bg-sell-soft px-3 py-2 text-center text-xs font-bold text-sell"
+          >
+            {errorMsg}
+          </p>
+        ) : null}
 
         {savedNotice ? (
           <p className="flex items-center justify-center gap-1.5 rounded-xl bg-buy-soft px-3 py-2 text-xs font-bold text-buy">
             <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-            تنظیمات با موفقیت ذخیره نمایشی شد.
+            {savedNotice}
           </p>
         ) : null}
 

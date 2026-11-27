@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ArrowUp,
   Calendar,
@@ -10,8 +10,21 @@ import {
   Search,
   SlidersHorizontal,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER, SCREEN1_BOARD_SYMBOLS } from "@/data/sample";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface DiscrepancyItem {
+  userId: string;
+  userName: string;
+  productId: string;
+  productName: string;
+  tradesPosition: string;
+  ledgerPosition: string;
+  difference: string;
+}
 
 type DateChip = "today" | "3days" | "7days" | "month";
 
@@ -23,11 +36,54 @@ const DATE_CHIPS: { id: DateChip; label: string }[] = [
 ];
 
 export function Screen13Discrepancy() {
+  const { accessDenied } = useEndpointAccess("/admin/reports/discrepancy");
   const [dateChip, setDateChip] = useState<DateChip>("today");
   const [counterparty, setCounterparty] = useState("all");
   const [commodity, setCommodity] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [recheckNotice, setRecheckNotice] = useState<string | null>(null);
+  const [discrepancies, setDiscrepancies] = useState<DiscrepancyItem[]>([]);
+
+  const loadDiscrepancies = useCallback(async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+    try {
+      const res = await fetch(
+        `${API_BASE}/admin/reports/discrepancy?range=${dateChip}`,
+        {
+          credentials: "include",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.discrepancies)) {
+          setDiscrepancies(data.discrepancies);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [accessDenied, dateChip]);
+
+  useEffect(() => {
+    void loadDiscrepancies();
+  }, [loadDiscrepancies]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -164,7 +220,24 @@ export function Screen13Discrepancy() {
           <span>تراز ۱۰۰٪ فیزیکی و ریالی</span>
         </div>
 
-        {/* Empty State */}
+        {/* Empty State or Discrepancies */}
+        {discrepancies.length > 0 ? (
+          <section className="space-y-2">
+            {discrepancies.map((d) => (
+              <article
+                key={`${d.userId}-${d.productId}`}
+                className="rounded-2xl border border-sell/45 bg-sell-soft p-3.5 text-xs text-sell"
+              >
+                <p className="font-extrabold">
+                  {d.userName} • {d.productName}
+                </p>
+                <p className="mt-1 text-[11px]">
+                  معاملات: {d.tradesPosition} | دفتر کل: {d.ledgerPosition} | اختلاف: {d.difference}
+                </p>
+              </article>
+            ))}
+          </section>
+        ) : (
         <section className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border-subtle bg-bg-card/75 px-5 py-8 text-center">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border-subtle bg-bg-primary text-text-muted">
             <Inbox className="h-6 w-6" aria-hidden="true" />
@@ -177,6 +250,7 @@ export function Screen13Discrepancy() {
             نشده است و ترازهای سیستم کاملاً منطبق می{"\u200c"}باشد.
           </p>
         </section>
+        )}
 
         {/* Three Mini-Stats */}
         <section className="grid grid-cols-3 gap-2">
@@ -209,9 +283,14 @@ export function Screen13Discrepancy() {
         {/* Gold Button */}
         <button
           type="button"
-          onClick={() =>
-            setRecheckNotice("ترازهای فیزیکی و ریالی بدون مغایرت تایید شد.")
-          }
+          onClick={async () => {
+            await loadDiscrepancies();
+            setRecheckNotice(
+              discrepancies.length === 0
+                ? "ترازهای فیزیکی و ریالی بدون مغایرت تایید شد."
+                : `${discrepancies.length} مورد مغایرت شناسایی شد.`
+            );
+          }}
           className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gold py-3 text-xs font-extrabold text-bg-primary hover:opacity-90 cursor-pointer"
         >
           <RefreshCw className="h-4 w-4" aria-hidden="true" />

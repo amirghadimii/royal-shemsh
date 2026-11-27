@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 import { Pencil, Plus, Power, Send, Trash2 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 interface SmsRule {
   id: string;
@@ -14,6 +18,7 @@ interface SmsRule {
   template: string;
   extraNote?: string;
   hasManualSend: boolean;
+  isActive?: boolean;
 }
 
 const RULES: SmsRule[] = [
@@ -51,6 +56,89 @@ const RULES: SmsRule[] = [
 ];
 
 export function Screen30SmsRules() {
+  const { accessDenied } = useEndpointAccess("/admin/sms-rules");
+  const [rules, setRules] = useState<SmsRule[]>(RULES);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const loadRules = useCallback(async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+    const res = await fetch(`${API_BASE}/admin/sms-rules`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.rules) && data.rules.length > 0) {
+        setRules(
+          data.rules.map(
+            (r: {
+              id: string;
+              code: string;
+              title: string;
+              triggerType: string;
+              triggerCondition: string;
+              templateText: string;
+              extraNote?: string | null;
+              isActive: boolean;
+            }) => ({
+              id: r.id,
+              title: r.title,
+              mode: r.triggerType === "MANUAL" ? "دستی" : "خودکار سیستمی",
+              targetLabel: r.triggerCondition,
+              code: r.code,
+              template: r.templateText,
+              extraNote: r.extraNote ?? undefined,
+              hasManualSend: r.triggerType === "MANUAL",
+              isActive: r.isActive,
+            })
+          )
+        );
+      }
+    }
+  }, [accessDenied]);
+
+  useEffect(() => {
+    void loadRules();
+  }, [loadRules]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
+
+  const handleToggleActive = async (rule: SmsRule) => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    const nextActive = !(rule.isActive ?? true);
+    const res = await fetch(`${API_BASE}/admin/sms-rules/${rule.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      credentials: "include",
+      body: JSON.stringify({ isActive: nextActive }),
+    });
+    if (res.ok) {
+      setNotice(`قانون «${rule.title}» ${nextActive ? "فعال" : "غیرفعال"} شد.`);
+      await loadRules();
+    }
+  };
+
   return (
     <AppShell
       activeTab="more"
@@ -99,9 +187,15 @@ export function Screen30SmsRules() {
           </div>
         </div>
 
+        {notice ? (
+          <p className="rounded-xl bg-buy-soft px-3 py-2 text-center text-xs font-bold text-buy">
+            {notice}
+          </p>
+        ) : null}
+
         {/* Three Rule Cards */}
         <div className="space-y-3">
-          {RULES.map((rule) => (
+          {rules.map((rule) => (
             <article
               key={rule.id}
               className="rounded-2xl border border-border-subtle bg-bg-card p-3.5 space-y-2.5"
@@ -121,8 +215,14 @@ export function Screen30SmsRules() {
                   </p>
                 </div>
 
-                <span className="shrink-0 rounded-full border border-buy/30 bg-buy-soft px-2.5 py-0.5 text-[10px] font-bold text-buy">
-                  فعال
+                <span
+                  className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-bold ${
+                    rule.isActive === false
+                      ? "border-sell/30 bg-sell-soft text-sell"
+                      : "border-buy/30 bg-buy-soft text-buy"
+                  }`}
+                >
+                  {rule.isActive === false ? "غیرفعال" : "فعال"}
                 </span>
               </div>
 
@@ -173,10 +273,11 @@ export function Screen30SmsRules() {
 
                 <button
                   type="button"
+                  onClick={() => void handleToggleActive(rule)}
                   className="inline-flex items-center justify-center gap-1 rounded-xl border border-border-subtle bg-bg-primary py-2 text-[10px] font-bold text-text-secondary hover:text-text-primary cursor-pointer"
                 >
                   <Power className="h-3 w-3" aria-hidden="true" />
-                  <span>غیرفعال</span>
+                  <span>{rule.isActive === false ? "فعال" : "غیرفعال"}</span>
                 </button>
 
                 <button

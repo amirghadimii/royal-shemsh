@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -9,8 +9,12 @@ import {
   Search,
   Tag,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 type PLFilter = "all" | "profit" | "loss";
 
@@ -105,11 +109,66 @@ const CUSTOMER_PL_ROWS: CustomerPLRow[] = [
 ];
 
 export function Screen9CustomerPL() {
+  const { accessDenied } = useEndpointAccess("/admin/reports/customer-pl");
   const [filter, setFilter] = useState<PLFilter>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [rows, setRows] = useState<CustomerPLRow[]>(CUSTOMER_PL_ROWS);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    fetch(`${API_BASE}/admin/reports/customer-pl`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!Array.isArray(data?.rows)) return;
+        setRows(
+          data.rows.map(
+            (r: {
+              userId: string;
+              code: number;
+              name: string;
+              profitLossToman: string;
+              cashBalanceToman: string;
+              goldGrams: string;
+              aed: string;
+              naghdeFarda: string;
+              emami86: string;
+            }) => {
+              const plNum = Number(r.profitLossToman);
+              const cashNum = Number(r.cashBalanceToman);
+              const goldNum = Number(r.goldGrams);
+              return {
+                id: r.userId,
+                name: r.name,
+                codeText: `کد: ${formatFaNumber(r.code)}`,
+                plText: `${plNum > 0 ? "+" : ""}${formatFaNumber(plNum)}`,
+                isLoss: plNum < 0,
+                hazerStatus:
+                  cashNum < 0
+                    ? `بدهکار (${formatFaNumber(cashNum)} ت)`
+                    : `بستانکار (+${formatFaNumber(cashNum)} ت)`,
+                goldBalance: `${formatFaNumber(goldNum)} گرم`,
+                isNegativeGold: goldNum < 0,
+                aed: formatFaNumber(Number(r.aed)),
+                naghdeFarda: formatFaNumber(Number(r.naghdeFarda)),
+                emami86: `${formatFaNumber(Number(r.emami86))} عدد`,
+              };
+            }
+          )
+        );
+      })
+      .catch(() => {});
+  }, [accessDenied]);
 
   const filteredRows = useMemo(() => {
-    return CUSTOMER_PL_ROWS.filter((row) => {
+    return rows.filter((row) => {
       if (filter === "profit" && row.isLoss) return false;
       if (filter === "loss" && !row.isLoss) return false;
       if (searchQuery.trim() !== "") {
@@ -118,7 +177,19 @@ export function Screen9CustomerPL() {
       }
       return true;
     });
-  }, [filter, searchQuery]);
+  }, [rows, filter, searchQuery]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell

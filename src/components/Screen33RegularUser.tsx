@@ -1,7 +1,9 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   FileCheck2,
   Headphones,
   Inbox,
@@ -9,11 +11,24 @@ import {
   ShieldAlert,
   User,
   UserCheck,
+  WifiOff,
 } from "lucide-react";
 import { AppShell } from "@/components/design-system";
 import { CustomLevel3Header } from "@/components/CustomLevel3Header";
 import { SCREEN1_BOARD_SYMBOLS } from "@/data/sample";
 import { formatFaNumber } from "@/lib/format";
+import { useBoardSocket } from "@/lib/useBoardSocket";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface ApiBoardProduct {
+  id: string;
+  name: string;
+  badge: string;
+  subtitle: string;
+  buyPrice: string | number;
+  sellPrice: string | number;
+}
 
 const EMPTY_SECTIONS = [
   {
@@ -40,6 +55,76 @@ const LOCKED_SERVICES = [
 ];
 
 export function Screen33RegularUser() {
+  const [boardItems, setBoardItems] = useState(SCREEN1_BOARD_SYMBOLS);
+  const [userLabel, setUserLabel] = useState("امیر قدیمی ۱");
+  const [tradingStopped, setTradingStopped] = useState(false);
+
+  const syncRegularBoard = useCallback(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+
+    fetch(`${API_BASE}/auth/me`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.user?.fullName) setUserLabel(data.user.fullName);
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE}/board/products`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (typeof data?.tradingStopped === "boolean") {
+          setTradingStopped(data.tradingStopped);
+        }
+        if (Array.isArray(data?.products)) {
+          setBoardItems(
+            data.products.map((p: ApiBoardProduct) => ({
+              id: p.id,
+              name: p.name,
+              badge: p.badge,
+              subtitle: p.subtitle,
+              buyPrice: Number(p.buyPrice),
+              sellPrice: Number(p.sellPrice),
+            }))
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    syncRegularBoard();
+  }, [syncRegularBoard]);
+
+  const { socketStatus } = useBoardSocket({
+    onPriceUpdate: (ev) => {
+      setBoardItems((prev) =>
+        prev.map((item) =>
+          item.id === ev.productId || item.name === ev.name
+            ? {
+                ...item,
+                buyPrice: Number(ev.buyPrice),
+                sellPrice: Number(ev.sellPrice),
+              }
+            : item
+        )
+      );
+    },
+    onBoardStatus: (ev) => {
+      setTradingStopped(ev.tradingStopped);
+    },
+    onReconnect: syncRegularBoard,
+  });
+
   return (
     <div className="min-h-dvh bg-bg-primary text-text-primary flex flex-col">
       <CustomLevel3Header />
@@ -55,22 +140,70 @@ export function Screen33RegularUser() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <h1 className="truncate text-sm font-extrabold text-text-primary">
-                    امیر قدیمی ۱
+                    {userLabel}
                   </h1>
                   <span className="rounded-md border border-border-subtle bg-bg-primary px-2 py-0.5 text-[10px] font-bold text-text-secondary">
                     کاربر عادی
                   </span>
                 </div>
-                <p className="mt-0.5 flex items-center gap-1.5 text-[10px] text-buy font-semibold">
+                <p
+                  className={`mt-0.5 flex items-center gap-1.5 text-[10px] font-semibold ${
+                    socketStatus === "disconnected" ? "text-sell" : "text-buy"
+                  }`}
+                >
                   <span
-                    className="h-1.5 w-1.5 rounded-full bg-buy"
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      socketStatus === "disconnected" ? "bg-sell" : "bg-buy"
+                    }`}
                     aria-hidden="true"
                   />
-                  آنلاین • سامانه معاملات رویال شمش
+                  {socketStatus === "disconnected"
+                    ? "قطع ارتباط • سامانه معاملات رویال شمش"
+                    : "آنلاین • سامانه معاملات رویال شمش"}
                 </p>
               </div>
             </div>
           </section>
+
+          {socketStatus === "disconnected" ? (
+            <section
+              role="alert"
+              className="flex items-start gap-2.5 rounded-2xl border border-sell/45 bg-[#2A1217] px-3.5 py-3 text-sell"
+            >
+              <WifiOff
+                className="mt-0.5 h-4 w-4 shrink-0 text-sell"
+                aria-hidden="true"
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-sell">
+                  ارتباط با سرور قطع شده است
+                </p>
+                <p className="mt-0.5 text-[11px] text-sell/85">
+                  در حال تلاش برای اتصال مجدد و همگام‌سازی قیمت‌ها...
+                </p>
+              </div>
+            </section>
+          ) : null}
+
+          {tradingStopped ? (
+            <section
+              role="alert"
+              className="flex items-start gap-2.5 rounded-2xl border border-sell/45 bg-[#2A1217] px-3.5 py-3 text-sell"
+            >
+              <AlertTriangle
+                className="mt-0.5 h-4 w-4 shrink-0 text-sell"
+                aria-hidden="true"
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-sell">
+                  معاملات توسط مدیر متوقف شده است
+                </p>
+                <p className="mt-0.5 text-[11px] text-sell/85">
+                  ثبت سفارش و معاملات لحظه‌ای موقتاً غیرفعال می‌باشد
+                </p>
+              </div>
+            </section>
+          ) : null}
 
           {/* Price Board — Identical 7 products & تومان prices to Screen 1 */}
           <section className="overflow-hidden rounded-2xl border border-border-subtle bg-bg-card">
@@ -100,40 +233,49 @@ export function Screen33RegularUser() {
             </div>
 
             <div className="divide-y divide-border-subtle">
-              {SCREEN1_BOARD_SYMBOLS.map((item) => (
-                <div
-                  key={item.id}
-                  className="grid grid-cols-[1.45fr_1fr_1fr] items-center gap-1.5 px-3 py-2.5"
-                >
-                  <div className="min-w-0 text-right">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="truncate text-xs font-bold text-text-primary">
-                        {item.name}
-                      </span>
-                      <span className="shrink-0 rounded-md border border-gold/25 bg-gold-soft px-1.5 py-0.5 text-[9px] font-semibold text-gold-t80">
-                        {item.badge}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 truncate text-[10px] text-text-secondary">
-                      {item.subtitle}
-                    </p>
-                  </div>
-
-                  <div className="text-center">
-                    <p className="tabular-nums-fa text-xs font-bold text-buy">
-                      {formatFaNumber(item.buyPrice)}
-                    </p>
-                    <p className="text-[9px] text-text-muted">تومان</p>
-                  </div>
-
-                  <div className="text-left">
-                    <p className="tabular-nums-fa text-xs font-bold text-sell">
-                      {formatFaNumber(item.sellPrice)}
-                    </p>
-                    <p className="text-[9px] text-text-muted">تومان</p>
-                  </div>
+              {boardItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
+                  <Inbox className="h-6 w-6 text-text-muted" aria-hidden="true" />
+                  <p className="mt-2 text-xs font-bold text-text-primary">
+                    کالایی جهت معامله یافت نشد
+                  </p>
                 </div>
-              ))}
+              ) : (
+                boardItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="grid grid-cols-[1.45fr_1fr_1fr] items-center gap-1.5 px-3 py-2.5"
+                  >
+                    <div className="min-w-0 text-right">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="truncate text-xs font-bold text-text-primary">
+                          {item.name}
+                        </span>
+                        <span className="shrink-0 rounded-md border border-gold/25 bg-gold-soft px-1.5 py-0.5 text-[9px] font-semibold text-gold-t80">
+                          {item.badge}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate text-[10px] text-text-secondary">
+                        {item.subtitle}
+                      </p>
+                    </div>
+
+                    <div className="text-center">
+                      <p className="tabular-nums-fa text-xs font-bold text-buy">
+                        {formatFaNumber(item.buyPrice)}
+                      </p>
+                      <p className="text-[9px] text-text-muted">تومان</p>
+                    </div>
+
+                    <div className="text-left">
+                      <p className="tabular-nums-fa text-xs font-bold text-sell">
+                        {formatFaNumber(item.sellPrice)}
+                      </p>
+                      <p className="text-[9px] text-text-muted">تومان</p>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </section>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   CheckCircle2,
@@ -11,9 +11,23 @@ import {
   ShieldCheck,
   UserCheck,
 } from "lucide-react";
-import { AppShell, ProposedBanner } from "@/components/design-system";
+import { AppShell, NoAccessBanner, ProposedBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
 import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface ManualUserOption {
+  id: string;
+  fullName: string;
+  code: number;
+}
+
+interface ManualProductOption {
+  value: string;
+  label: string;
+}
 
 const PRODUCT_OPTIONS = [
   { value: "naghde-farda", label: "نقد فردا (تحویل فردایی شمش رویال)" },
@@ -25,13 +39,112 @@ const PRODUCT_OPTIONS = [
 ];
 
 export function Screen21ManualPreorderForm() {
+  const { accessDenied } = useEndpointAccess("/admin/users");
   const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [users, setUsers] = useState<ManualUserOption[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [products, setProducts] = useState<ManualProductOption[]>(PRODUCT_OPTIONS);
   const [product, setProduct] = useState("naghde-farda");
   const [unitPrice, setUnitPrice] = useState(44_280_000);
   const [weight, setWeight] = useState(100);
+  const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    Promise.all([
+      fetch(`${API_BASE}/admin/users`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${API_BASE}/admin/products`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => (r.ok ? r.json() : null)),
+    ])
+      .then(([uJson, pJson]) => {
+        if (Array.isArray(uJson?.users) && uJson.users.length > 0) {
+          setUsers(uJson.users);
+          const reg =
+            uJson.users.find((u: { role?: { code: string } }) => u.role?.code === "REGULAR") ??
+            uJson.users[0];
+          setSelectedUserId(reg.id);
+        }
+        if (Array.isArray(pJson?.products) && pJson.products.length > 0) {
+          const mapped = pJson.products.map((p: { id: string; name: string }) => ({
+            value: p.id,
+            label: p.name,
+          }));
+          setProducts(mapped);
+          setProduct(mapped[0].value);
+        }
+      })
+      .catch(() => {});
+  }, [accessDenied]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   const totalToman = unitPrice * weight;
+
+  const handleManualSubmit = async () => {
+    setNotice(null);
+    setErrorMsg(null);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || !selectedUserId) {
+      setNotice("پیش سفارش پیشنهادی با موفقیت ثبت نمایشی شد.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/preorders/manual`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          userId: selectedUserId,
+          productId: product,
+          side: side.toUpperCase(),
+          targetPrice: String(unitPrice),
+          weightGrams: String(weight),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.message ?? "خطا در ثبت پیش‌سفارش دستی");
+        return;
+      }
+      setNotice(
+        `پیش‌سفارش دستی برای ${data.preOrder.user.fullName} (${data.preOrder.product.name}) ثبت شد.`
+      );
+    } catch {
+      setErrorMsg("خطا در ارتباط با سرور");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <AppShell
@@ -97,7 +210,7 @@ export function Screen21ManualPreorderForm() {
           </div>
 
           {/* Counterparty User */}
-          <div className="rounded-xl border border-border-subtle bg-bg-primary/70 p-3 space-y-1">
+          <div className="rounded-xl border border-border-subtle bg-bg-primary/70 p-3 space-y-1.5">
             <div className="flex items-center justify-between text-[11px]">
               <span className="text-text-secondary">کاربر طرف حساب</span>
               <span className="inline-flex items-center gap-1 font-bold text-buy">
@@ -105,13 +218,29 @@ export function Screen21ManualPreorderForm() {
                 احراز شده
               </span>
             </div>
-            <p className="text-xs font-extrabold text-text-primary">
-              کیارش پورسلیک (کد{" "}
-              <span dir="ltr" className="inline-block text-gold">
-                RS-8831
-              </span>
-              )
-            </p>
+            {users.length > 0 ? (
+              <select
+                id="s21-user"
+                aria-label="کاربر طرف حساب"
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="w-full rounded-xl border border-border-subtle bg-bg-card px-2.5 py-2 text-xs font-bold text-text-primary focus:border-gold focus:outline-none"
+              >
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.fullName} (کد {u.code})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-xs font-extrabold text-text-primary">
+                کیارش پورسلیک (کد{" "}
+                <span dir="ltr" className="inline-block text-gold">
+                  RS-8831
+                </span>
+                )
+              </p>
+            )}
             <p className="text-[10px] text-text-secondary">
               کیف دارایی: ۵ شمش ۱۰۰ گرمی فعال
             </p>
@@ -136,7 +265,7 @@ export function Screen21ManualPreorderForm() {
               onChange={(e) => setProduct(e.target.value)}
               className="w-full rounded-xl border border-border-subtle bg-bg-primary px-3 py-2.5 text-xs font-semibold text-text-primary focus:border-gold focus:outline-none"
             >
-              {PRODUCT_OPTIONS.map((opt) => (
+              {products.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
                 </option>
@@ -255,13 +384,21 @@ export function Screen21ManualPreorderForm() {
 
           <button
             type="button"
-            onClick={() =>
-              setNotice("پیش سفارش پیشنهادی با موفقیت ثبت نمایشی شد.")
-            }
-            className="w-full rounded-xl bg-gold py-3 text-xs font-extrabold text-bg-primary hover:opacity-90 cursor-pointer"
+            disabled={submitting}
+            onClick={() => void handleManualSubmit()}
+            className="w-full rounded-xl bg-gold py-3 text-xs font-extrabold text-bg-primary hover:opacity-90 disabled:opacity-50 cursor-pointer"
           >
-            ثبت پیش سفارش
+            {submitting ? "در حال ثبت..." : "ثبت پیش سفارش"}
           </button>
+
+          {errorMsg ? (
+            <p
+              role="alert"
+              className="rounded-xl bg-sell-soft px-3 py-2 text-center text-xs font-bold text-sell"
+            >
+              {errorMsg}
+            </p>
+          ) : null}
 
           {notice ? (
             <p className="flex items-center justify-center gap-1.5 rounded-xl bg-buy-soft px-3 py-2 text-xs font-bold text-buy">

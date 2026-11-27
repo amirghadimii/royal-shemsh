@@ -13,7 +13,10 @@ import {
 import { AppShell } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
 import { formatFaNumber, toPersianDigits } from "@/lib/format";
+import { useBoardSocket } from "@/lib/useBoardSocket";
 import type { TradeSide } from "@/types/trading";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 const BUY_UNIT_PRICE = 44_280_000;
 const SELL_UNIT_PRICE = 44_320_000;
@@ -21,25 +24,115 @@ const MIN_GRAMS = 1;
 const MAX_GRAMS = 1_000;
 const TIMER_DURATION = 60;
 
+interface LiveProduct {
+  id: string;
+  name: string;
+  unit: string;
+  buyPrice: number;
+  sellPrice: number;
+  minOrder: number;
+  maxOrder: number;
+}
+
+interface PendingOrderState {
+  id: string;
+  quoteCode: string;
+  status: string;
+  totalAmount: string;
+  expiresAt: string;
+}
+
 export function Screen2TradeForm() {
   const [side, setSide] = useState<TradeSide>("buy");
   const [grams, setGrams] = useState<number>(10);
   const [gramsInput, setGramsInput] = useState<string>("۱۰");
   const [secondsLeft, setSecondsLeft] = useState<number>(TIMER_DURATION);
   const [submittedNote, setSubmittedNote] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [liveProduct, setLiveProduct] = useState<LiveProduct | null>(null);
+  const [pendingOrder, setPendingOrder] = useState<PendingOrderState | null>(null);
 
-  // Single live 60-second countdown value shared by ring, text, and settlement card
+  useBoardSocket({
+    onOrderUpdated: (ev) => {
+      if (!pendingOrder || ev.id !== pendingOrder.id) return;
+      setPendingOrder((prev) => (prev ? { ...prev, status: ev.status } : null));
+      if (ev.status === "APPROVED") {
+        setSubmittedNote(
+          `تایید شده — سفارش ${ev.quoteCode} با موفقیت تایید شد.`
+        );
+      } else if (ev.status === "REJECTED") {
+        setSubmittedNote(
+          `رد شده — سفارش ${ev.quoteCode} رد شد (${ev.rejectionReason ?? "رد توسط مدیر"}).`
+        );
+      } else if (ev.status === "EXPIRED") {
+        setSubmittedNote(
+          `منقضی / بدون پاسخ — مهلت تایید سفارش ${ev.quoteCode} به پایان رسید.`
+        );
+      }
+    },
+  });
+  const [clientRequestId, setClientRequestId] = useState<string>(() =>
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `req-${Date.now()}`
+  );
+
   useEffect(() => {
-    const interval = setInterval(() => {
-      setSecondsLeft((prev) => (prev <= 1 ? TIMER_DURATION : prev - 1));
-    }, 1000);
-    return () => clearInterval(interval);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+
+    fetch(`${API_BASE}/board/products`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.products) && data.products.length > 0) {
+          const p = data.products[0];
+          setLiveProduct({
+            id: p.id,
+            name: p.name,
+            unit: p.unit,
+            buyPrice: Number(p.buyPrice),
+            sellPrice: Number(p.sellPrice),
+            minOrder: Number(p.minOrder),
+            maxOrder: Number(p.maxOrder),
+          });
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  const unitPrice = side === "buy" ? BUY_UNIT_PRICE : SELL_UNIT_PRICE;
+  // Single live countdown value shared by ring, text, and pending order
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (pendingOrder?.expiresAt) {
+        const left = Math.max(
+          0,
+          Math.floor(
+            (new Date(pendingOrder.expiresAt).getTime() - Date.now()) / 1000
+          )
+        );
+        setSecondsLeft(left);
+      } else {
+        setSecondsLeft((prev) => (prev <= 1 ? TIMER_DURATION : prev - 1));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [pendingOrder?.expiresAt]);
+
+  const activeBuyPrice = liveProduct?.buyPrice ?? BUY_UNIT_PRICE;
+  const activeSellPrice = liveProduct?.sellPrice ?? SELL_UNIT_PRICE;
+  const minLimit = liveProduct?.minOrder ?? MIN_GRAMS;
+  const maxLimit = liveProduct?.maxOrder ?? MAX_GRAMS;
+  const unitPrice = side === "buy" ? activeBuyPrice : activeSellPrice;
   const isValidGrams =
-    Number.isInteger(grams) && grams >= MIN_GRAMS && grams <= MAX_GRAMS;
-  const totalToman = isValidGrams ? grams * unitPrice : 0;
+    Number.isFinite(grams) && grams >= minLimit && grams <= maxLimit;
+  const totalToman = isValidGrams ? Math.round(grams * unitPrice) : 0;
   const totalRial = totalToman * 10;
 
   const timerProgress = (secondsLeft / TIMER_DURATION) * 100;
@@ -81,13 +174,99 @@ export function Screen2TradeForm() {
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!isValidGrams) return;
-    setSubmittedNote(
-      `درخواست نمونه ${side === "buy" ? "خرید" : "فروش"} ${formatFaNumber(
-        grams
-      )} گرم به مبلغ ${formatFaNumber(totalToman)} تومان ثبت نمایشی شد.`
-    );
+    setErrorMsg(null);
+    setSubmittedNote(null);
+
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+
+    if (!token || !liveProduct) {
+      setSubmittedNote(
+        `درخواست نمونه ${side === "buy" ? "خرید" : "فروش"} ${formatFaNumber(
+          grams
+        )} گرم به مبلغ ${formatFaNumber(totalToman)} تومان ثبت نمایشی شد.`
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/orders`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          productId: liveProduct.id,
+          side: side.toUpperCase(),
+          quantity: String(grams),
+          clientRequestId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.message ?? "خطا در ثبت سفارش");
+        return;
+      }
+      const o = data.order;
+      setPendingOrder({
+        id: o.id,
+        quoteCode: o.quoteCode,
+        status: o.status,
+        totalAmount: String(o.totalAmount),
+        expiresAt: o.expiresAt,
+      });
+      if (o.expiresAt) {
+        setSecondsLeft(
+          Math.max(
+            0,
+            Math.floor((new Date(o.expiresAt).getTime() - Date.now()) / 1000)
+          )
+        );
+      }
+      setSubmittedNote(
+        `سفارش ${o.quoteCode} در وضعیت در انتظار تایید (${formatFaNumber(
+          Number(o.totalAmount)
+        )} تومان) ثبت شد.`
+      );
+      setClientRequestId(
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `req-${Date.now()}`
+      );
+    } catch {
+      setErrorMsg("خطا در ارتباط با سرور");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancelPending = async () => {
+    if (!pendingOrder) return;
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/orders/${pendingOrder.id}/cancel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      });
+      if (res.ok) {
+        setPendingOrder(null);
+        setSubmittedNote("سفارش با موفقیت لغو شد.");
+      }
+    } catch {
+      // ignore
+    }
   };
 
   return (
@@ -440,20 +619,39 @@ export function Screen2TradeForm() {
         <div className="space-y-2 pb-2">
           <button
             type="button"
-            disabled={!isValidGrams}
-            onClick={handleSubmit}
+            disabled={!isValidGrams || submitting}
+            onClick={() => void handleSubmit()}
             className={`w-full rounded-2xl py-3.5 text-sm font-extrabold text-white shadow-md transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer ${
               side === "buy" ? "bg-buy" : "bg-sell"
             }`}
           >
-            ثبت درخواست {side === "buy" ? "خرید" : "فروش"} (
-            {formatFaNumber(totalToman)} تومان)
+            {submitting
+              ? "در حال ثبت سفارش..."
+              : `ثبت درخواست ${side === "buy" ? "خرید" : "فروش"} (${formatFaNumber(totalToman)} تومان)`}
           </button>
 
-          {submittedNote ? (
-            <p className="rounded-xl border border-gold/30 bg-gold-soft px-3 py-2 text-center text-xs font-medium text-gold">
-              {submittedNote}
+          {errorMsg ? (
+            <p
+              role="alert"
+              className="rounded-xl border border-sell/45 bg-sell-soft px-3 py-2 text-center text-xs font-bold text-sell"
+            >
+              {errorMsg}
             </p>
+          ) : null}
+
+          {submittedNote ? (
+            <div className="space-y-2 rounded-xl border border-gold/30 bg-gold-soft px-3 py-2 text-center text-xs font-medium text-gold">
+              <p>{submittedNote}</p>
+              {pendingOrder && pendingOrder.status === "PENDING_APPROVAL" ? (
+                <button
+                  type="button"
+                  onClick={() => void handleCancelPending()}
+                  className="rounded-lg border border-sell/45 bg-sell-soft px-3 py-1 text-[11px] font-bold text-sell cursor-pointer"
+                >
+                  لغو سفارش
+                </button>
+              ) : null}
+            </div>
           ) : null}
 
           <p className="text-center text-[11px] text-text-secondary">

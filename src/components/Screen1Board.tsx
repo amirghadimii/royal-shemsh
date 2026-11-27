@@ -1,15 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { AlertTriangle, Clock, SearchX } from "lucide-react";
+import { AlertTriangle, Clock, SearchX, WifiOff } from "lucide-react";
 import { AppShell } from "@/components/design-system";
 import { Screen15LoginNoticeModal } from "@/components/Screen15LoginNoticeModal";
 import { Screen16ApprovalModal } from "@/components/Screen16ApprovalModal";
 import { Screen18EmptyBoard } from "@/components/Screen18EmptyBoard";
 import { SAMPLE_USER, SCREEN1_BOARD_SYMBOLS } from "@/data/sample";
 import { formatFaNumber } from "@/lib/format";
+import { type SocketNewOrder, useBoardSocket } from "@/lib/useBoardSocket";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 export function Screen1Board() {
   const searchParams = useSearchParams();
@@ -17,6 +20,142 @@ export function Screen1Board() {
   const viewParam = searchParams.get("view");
   const [loginNoticeDismissed, setLoginNoticeDismissed] = useState(false);
   const [approvalDismissed, setApprovalDismissed] = useState(false);
+  const [tradingStopped, setTradingStopped] = useState(true);
+  const [workingHours, setWorkingHours] = useState("۱۰:۳۰ تا ۲۱:۰۰");
+  const [lastTickAt, setLastTickAt] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState<number | null>(null);
+  const [isStale, setIsStale] = useState(false);
+  const [boardSymbols, setBoardSymbols] = useState(SCREEN1_BOARD_SYMBOLS);
+  const [pendingOrder, setPendingOrder] = useState<SocketNewOrder | null>(null);
+
+  const syncBoard = useCallback(() => {
+    fetch(`${API_BASE}/board/status`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        if (typeof data.tradingStopped === "boolean") {
+          setTradingStopped(data.tradingStopped);
+        }
+        if (typeof data.workingHours === "string" && data.workingHours) {
+          setWorkingHours(data.workingHours);
+        }
+        if (data.lastTickAt !== undefined) setLastTickAt(data.lastTickAt);
+        if (typeof data.elapsedSeconds === "number") {
+          setElapsedSeconds(data.elapsedSeconds);
+        }
+        if (typeof data.isStale === "boolean") setIsStale(data.isStale);
+      })
+      .catch(() => {});
+
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+
+    fetch(`${API_BASE}/board/products`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.products) && data.products.length > 0) {
+          setBoardSymbols(
+            data.products.slice(0, 7).map(
+              (p: {
+                id: string;
+                name: string;
+                badge: string;
+                subtitle: string;
+                buyPrice: string | number;
+                sellPrice: string | number;
+              }) => ({
+                id: p.id,
+                name: p.name,
+                badge: p.badge,
+                subtitle: p.subtitle,
+                buyPrice: Number(p.buyPrice),
+                sellPrice: Number(p.sellPrice),
+                clickable: true,
+              })
+            )
+          );
+        }
+      })
+      .catch(() => {});
+
+    fetch(`${API_BASE}/orders/pending`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.orders) && data.orders.length > 0) {
+          const o = data.orders[0];
+          setPendingOrder({
+            id: o.id,
+            quoteCode: o.quoteCode,
+            userId: o.userId,
+            userName: o.user?.fullName ?? "کاربر",
+            productId: o.productId,
+            productName: o.product?.name ?? "کالا",
+            unit: o.product?.unit ?? "گرم",
+            side: o.side,
+            quantity: String(o.quantity),
+            unitPrice: String(o.unitPrice),
+            totalAmount: String(o.totalAmount),
+            status: o.status,
+            expiresAt: o.expiresAt,
+            createdAt: o.createdAt,
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    syncBoard();
+  }, [syncBoard]);
+
+  const { socketStatus } = useBoardSocket({
+    onPriceUpdate: (ev) => {
+      setLastTickAt(ev.recordedAt);
+      setElapsedSeconds(0);
+      setIsStale(false);
+      setBoardSymbols((prev) =>
+        prev.map((item) =>
+          item.id === ev.productId || item.name === ev.name
+            ? {
+                ...item,
+                buyPrice: Number(ev.buyPrice),
+                sellPrice: Number(ev.sellPrice),
+              }
+            : item
+        )
+      );
+    },
+    onBoardStatus: (ev) => {
+      setTradingStopped(ev.tradingStopped);
+      if (ev.workingHours) setWorkingHours(ev.workingHours);
+    },
+    onNewOrder: (ev) => {
+      setPendingOrder(ev);
+      setApprovalDismissed(false);
+    },
+    onOrderUpdated: (ev) => {
+      setPendingOrder((prev) =>
+        prev && prev.id === ev.id ? { ...prev, status: ev.status } : prev
+      );
+    },
+    onReconnect: syncBoard,
+  });
+
+  const lastUpdateLabel = lastTickAt
+    ? new Date(lastTickAt).toLocaleTimeString("fa-IR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "۱۰:۴۵";
 
   const isRegularEmptyView = viewParam === "empty-regular";
   const showLoginNotice =
@@ -38,8 +177,12 @@ export function Screen1Board() {
         onDismiss={() => setLoginNoticeDismissed(true)}
       />
       <Screen16ApprovalModal
-        open={showApprovalModal}
-        onClose={() => setApprovalDismissed(true)}
+        open={showApprovalModal || Boolean(pendingOrder)}
+        order={pendingOrder}
+        onClose={() => {
+          setApprovalDismissed(true);
+          setPendingOrder(null);
+        }}
       />
       {isRegularEmptyView ? (
         <Screen18EmptyBoard />
@@ -58,48 +201,85 @@ export function Screen1Board() {
               </p>
             </div>
             <p className="tabular-nums-fa text-lg font-extrabold tracking-tight text-gold sm:text-xl">
-              ۱۰:۳۰ تا ۲۱:۰۰
+              {workingHours}
             </p>
           </div>
         </section>
 
         {/* Stopped Banner (Dark Red) */}
-        <section
-          role="alert"
-          className="flex items-start gap-2.5 rounded-2xl border border-sell/45 bg-[#2A1217] px-3.5 py-3 text-sell"
-        >
-          <AlertTriangle
-            className="mt-0.5 h-4 w-4 shrink-0 text-sell"
-            aria-hidden="true"
-          />
-          <div className="min-w-0">
-            <p className="text-xs font-bold text-sell">
-              معاملات توسط مدیر متوقف شده است
-            </p>
-            <p className="mt-0.5 text-[11px] text-sell/85">
-              ثبت سفارش و معاملات لحظه‌ای موقتاً غیرفعال می‌باشد
-            </p>
-          </div>
-        </section>
+        {tradingStopped ? (
+          <section
+            role="alert"
+            className="flex items-start gap-2.5 rounded-2xl border border-sell/45 bg-[#2A1217] px-3.5 py-3 text-sell"
+          >
+            <AlertTriangle
+              className="mt-0.5 h-4 w-4 shrink-0 text-sell"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-sell">
+                معاملات توسط مدیر متوقف شده است
+              </p>
+              <p className="mt-0.5 text-[11px] text-sell/85">
+                ثبت سفارش و معاملات لحظه‌ای موقتاً غیرفعال می‌باشد
+              </p>
+            </div>
+          </section>
+        ) : null}
+
+        {/* Socket Disconnected Banner */}
+        {socketStatus === "disconnected" ? (
+          <section
+            role="alert"
+            className="flex items-start gap-2.5 rounded-2xl border border-sell/45 bg-[#2A1217] px-3.5 py-3 text-sell"
+          >
+            <WifiOff
+              className="mt-0.5 h-4 w-4 shrink-0 text-sell"
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-sell">
+                ارتباط با سرور قطع شده است
+              </p>
+              <p className="mt-0.5 text-[11px] text-sell/85">
+                در حال تلاش برای اتصال مجدد و همگام‌سازی قیمت‌ها...
+              </p>
+            </div>
+          </section>
+        ) : null}
 
         {/* Last-Update Row */}
         <div className="flex items-center justify-between px-1 text-xs">
           <div className="flex items-center gap-2">
             <span
-              className="h-2 w-2 rounded-full bg-buy shadow-[0_0_6px_rgba(16,185,129,0.85)]"
+              className={`h-2 w-2 rounded-full ${
+                isStale || socketStatus === "disconnected"
+                  ? "bg-sell shadow-[0_0_6px_rgba(239,68,68,0.85)]"
+                  : "bg-buy shadow-[0_0_6px_rgba(16,185,129,0.85)]"
+              }`}
               aria-hidden="true"
             />
             <span className="text-text-secondary">
               آخرین به‌روزرسانی قیمت:{" "}
               <strong className="tabular-nums-fa font-bold text-gold">
-                ۱۰:۴۵
+                {lastUpdateLabel}
               </strong>
             </span>
           </div>
 
-          <span className="inline-flex items-center gap-1 rounded-full border border-buy/35 bg-buy-soft px-2.5 py-0.5 text-[11px] font-semibold text-buy">
-            زنده
-          </span>
+          {socketStatus === "disconnected" ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-sell/35 bg-sell-soft px-2.5 py-0.5 text-[11px] font-semibold text-sell">
+              قطع ارتباط
+            </span>
+          ) : isStale ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-sell/35 bg-sell-soft px-2.5 py-0.5 text-[11px] font-semibold text-sell">
+              منقضی{elapsedSeconds !== null ? ` (${formatFaNumber(elapsedSeconds)} ثانیه)` : ""}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border border-buy/35 bg-buy-soft px-2.5 py-0.5 text-[11px] font-semibold text-buy">
+              زنده
+            </span>
+          )}
         </div>
 
         {/* Trading Board Table */}
@@ -123,7 +303,7 @@ export function Screen1Board() {
 
           {/* Product Rows */}
           <div className="divide-y divide-border-subtle">
-            {SCREEN1_BOARD_SYMBOLS.map((item) => {
+            {boardSymbols.map((item) => {
               const rowContent = (
                 <div className="grid grid-cols-[1.45fr_1fr_1fr] items-center gap-1.5 px-3 py-3 transition-colors hover:bg-bg-elevated/40">
                   {/* Symbol Name + Badge + Subtitle */}

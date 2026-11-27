@@ -1,6 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Calendar, Clock, Landmark } from "lucide-react";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 interface Screen15LoginNoticeModalProps {
   open: boolean;
@@ -11,6 +14,24 @@ export function Screen15LoginNoticeModal({
   open,
   onDismiss,
 }: Screen15LoginNoticeModalProps) {
+  const [title, setTitle] = useState(
+    "شروع کار سامانه رویال شمش ۱۰:۳۰ الی ۲۱:۰۰"
+  );
+  const [body, setBody] = useState(
+    "نقد فردا و مسکوکات روز چهارشنبه است، نقد پس‌فردا روز شنبه است، و شماره حساب بانکی باید حداکثر تا ساعت ۱۰:۰۰ ارسال شود."
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    fetch(`${API_BASE}/messages/announcement`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.announcement?.title) setTitle(data.announcement.title);
+        if (data?.announcement?.body) setBody(data.announcement.body);
+      })
+      .catch(() => {});
+  }, [open]);
+
   if (!open) return null;
 
   return (
@@ -32,12 +53,11 @@ export function Screen15LoginNoticeModal({
           id="login-notice-title"
           className="text-base font-extrabold leading-snug text-gold"
         >
-          شروع کار سامانه رویال شمش ۱۰:۳۰ الی ۲۱:۰۰
+          {title}
         </h1>
 
         <p className="text-xs leading-relaxed text-text-secondary">
-          نقد فردا و مسکوکات روز چهارشنبه است، نقد پس{"\u200c"}فردا روز شنبه است،
-          و شماره حساب بانکی باید حداکثر تا ساعت
+          {body}
         </p>
 
         <div className="space-y-2">

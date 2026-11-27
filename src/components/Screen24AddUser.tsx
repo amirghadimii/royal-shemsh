@@ -2,8 +2,18 @@
 
 import { useState } from "react";
 import { CheckCircle2, ShieldCheck, UserPlus } from "lucide-react";
-import { AppShell, ProposedBanner } from "@/components/design-system";
+import { AppShell, NoAccessBanner, ProposedBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+const ROLE_CODE_MAP: Record<string, string> = {
+  "کاربر عادی": "REGULAR",
+  "معامله\u200cگر (دسترسی لحظه\u200cای به مظنه رویال)": "REGULAR",
+  "سرگروه دفاتر بازار": "SYSTEM_MANAGER",
+  "مدیر ارشد سامانه": "ADMIN",
+};
 
 const ROLE_OPTIONS = [
   "کاربر عادی",
@@ -21,13 +31,76 @@ const BRANCH_OPTIONS = [
 ];
 
 export function Screen24AddUser() {
+  const { accessDenied } = useEndpointAccess("/admin/roles");
   const [fullName, setFullName] = useState("محمدجواد رضایی");
   const [username, setUsername] = useState("m_rezaei_gold");
   const [mobile, setMobile] = useState("۰۹۱۲۳۴۵۶۷۸۹");
   const [email, setEmail] = useState("m.rezaei@royalshemsh.com");
+  const [password, setPassword] = useState("User@1405");
   const [role, setRole] = useState(ROLE_OPTIONS[1]);
   const [branch, setBranch] = useState(BRANCH_OPTIONS[0]);
   const [require2FA, setRequire2FA] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
+
+  const handleSaveUser = async () => {
+    setErrorMsg(null);
+    setSavedMsg(null);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+
+    if (!token) {
+      setSavedMsg(`کاربر «${fullName}» در حالت نمایشی ثبت شد.`);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE}/admin/users`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          fullName,
+          username,
+          mobile,
+          email,
+          password,
+          roleCode: ROLE_CODE_MAP[role] ?? "REGULAR",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.message ?? "خطا در ثبت کاربر جدید");
+        return;
+      }
+      setSavedMsg(
+        `کاربر «${data.user.fullName}» با کد ${data.user.code} با موفقیت ثبت شد.`
+      );
+    } catch {
+      setErrorMsg("خطا در ارتباط با سرور");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <AppShell
@@ -132,6 +205,23 @@ export function Screen24AddUser() {
               className="w-full rounded-xl border border-border-subtle bg-bg-primary px-3 py-2 text-left text-xs font-medium text-text-primary focus:border-gold focus:outline-none"
             />
           </div>
+
+          <div className="space-y-1">
+            <label
+              htmlFor="u-password"
+              className="block text-[11px] font-semibold text-text-secondary"
+            >
+              رمز عبور ثابت *
+            </label>
+            <input
+              id="u-password"
+              type="password"
+              dir="ltr"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-border-subtle bg-bg-primary px-3 py-2 text-left text-xs font-medium text-text-primary focus:border-gold focus:outline-none"
+            />
+          </div>
         </section>
 
         {/* Role & Group */}
@@ -223,11 +313,22 @@ export function Screen24AddUser() {
 
           <button
             type="button"
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-buy py-3 text-xs font-extrabold text-white hover:opacity-90 cursor-pointer"
+            disabled={submitting}
+            onClick={() => void handleSaveUser()}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-buy py-3 text-xs font-extrabold text-white hover:opacity-90 disabled:opacity-50 cursor-pointer"
           >
             <UserPlus className="h-4 w-4" aria-hidden="true" />
-            <span>ذخیره کاربر</span>
+            <span>{submitting ? "در حال ثبت..." : "ذخیره کاربر"}</span>
           </button>
+
+          {errorMsg ? (
+            <p
+              role="alert"
+              className="rounded-xl border border-sell/45 bg-sell-soft px-3 py-2 text-center text-[11px] font-bold text-sell"
+            >
+              {errorMsg}
+            </p>
+          ) : null}
 
           <p className="text-center text-[10px] text-text-secondary">
             رمز عبور موقت و لینک فعال{"\u200c"}سازی از طریق پیامک برای کاربر
@@ -240,10 +341,10 @@ export function Screen24AddUser() {
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
           <div>
             <p className="text-xs font-extrabold">
-              کاربر جدید با موفقیت ثبت شد
+              {savedMsg ?? "کاربر جدید با موفقیت ثبت شد"}
             </p>
             <p className="tabular-nums-fa mt-0.5 text-[11px] text-buy/90">
-              پیامک فعال{"\u200c"}سازی به ۰۹۱۲۳۴۵۶۷۸۹ ارسال گردید.
+              پیامک فعال{"\u200c"}سازی به {mobile} ارسال گردید.
             </p>
           </div>
         </section>

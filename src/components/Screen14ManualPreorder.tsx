@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ChevronLeft,
   Info,
@@ -9,8 +10,9 @@ import {
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
 
 type SelectedDirection = "buy" | "sell" | null;
 
@@ -22,7 +24,21 @@ const STEP_CHIPS = [
 ];
 
 export function Screen14ManualPreorder() {
+  const router = useRouter();
+  const { accessDenied } = useEndpointAccess("/admin/users");
   const [direction, setDirection] = useState<SelectedDirection>(null);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -85,7 +101,10 @@ export function Screen14ManualPreorder() {
           <div className="grid grid-cols-2 gap-2.5">
             <button
               type="button"
-              onClick={() => setDirection("buy")}
+              onClick={() => {
+                setDirection("buy");
+                router.push("/manual-preorder-form?side=buy");
+              }}
               className={`rounded-2xl border px-3 py-3.5 text-center transition-colors cursor-pointer ${
                 direction === "buy"
                   ? "border-gold bg-gold-soft text-gold"
@@ -100,7 +119,10 @@ export function Screen14ManualPreorder() {
 
             <button
               type="button"
-              onClick={() => setDirection("sell")}
+              onClick={() => {
+                setDirection("sell");
+                router.push("/manual-preorder-form?side=sell");
+              }}
               className={`rounded-2xl border px-3 py-3.5 text-center transition-colors cursor-pointer ${
                 direction === "sell"
                   ? "border-gold bg-gold-soft text-gold"

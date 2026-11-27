@@ -1,11 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { FileSpreadsheet, ShieldCheck, Sliders, TrendingUp } from "lucide-react";
 import { AppShell } from "@/components/design-system";
 import { Screen20PricesNoAccess } from "@/components/Screen20PricesNoAccess";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface PriceTickItem {
+  id: string;
+  buyPrice: string | number;
+  sellPrice: string | number;
+  source: string;
+  recordedAt: string;
+}
 
 type PeriodId = "1d" | "1w" | "1m" | "3m";
 
@@ -33,9 +45,80 @@ const X_TICKS = ["۰۸/۰۴", "۰۸/۱۰", "۰۸/۱۶", "۰۸/۲۲", "۰۸/۲۸"
 
 export function Screen6Prices() {
   const searchParams = useSearchParams();
-  const isDenied = searchParams.get("access") === "denied";
+  const { accessDenied } = useEndpointAccess("/prices/history");
+  const isDenied = searchParams.get("access") === "denied" || accessDenied;
   const [selectedSymbol, setSelectedSymbol] = useState<string>("نقد فردا");
   const [selectedPeriod, setSelectedPeriod] = useState<PeriodId>("1m");
+  const [symbolChips, setSymbolChips] = useState<string[]>(SYMBOL_CHIPS);
+  const [ticks, setTicks] = useState<PriceTickItem[]>([]);
+  const [liveBuyPrice, setLiveBuyPrice] = useState<number | null>(null);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || isDenied) return;
+
+    fetch(
+      `${API_BASE}/prices/history?productName=${encodeURIComponent(selectedSymbol)}`,
+      {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        if (Array.isArray(data.products) && data.products.length > 0) {
+          setSymbolChips(
+            data.products.slice(0, 9).map((p: { name: string }) => p.name)
+          );
+        }
+        if (data.selectedProduct?.buyPrice !== undefined) {
+          setLiveBuyPrice(Number(data.selectedProduct.buyPrice));
+        }
+        if (Array.isArray(data.ticks)) {
+          setTicks(data.ticks);
+        }
+      })
+      .catch(() => {});
+  }, [selectedSymbol, isDenied]);
+
+  const chartGeometry = useMemo(() => {
+    if (ticks.length < 2) {
+      return {
+        linePath: "M 4 102 L 48 92 L 96 76 L 146 66 L 198 42 L 250 22",
+        areaPath:
+          "M 4 102 L 48 92 L 96 76 L 146 66 L 198 42 L 250 22 L 250 112 L 4 112 Z",
+        lastX: 250,
+        lastY: 22,
+        yLabels: Y_TICKS,
+      };
+    }
+    const vals = ticks.map((t) => Number(t.buyPrice));
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const span = max - min || 1;
+    const coords = vals.map((v, i) => {
+      const x = Math.round(4 + (i / (vals.length - 1)) * 246);
+      const y = Math.round(102 - ((v - min) / span) * 80);
+      return { x, y };
+    });
+    const linePath = coords
+      .map((c, idx) => `${idx === 0 ? "M" : "L"} ${c.x} ${c.y}`)
+      .join(" ");
+    const last = coords[coords.length - 1];
+    const areaPath = `${linePath} L ${last.x} 112 L ${coords[0].x} 112 Z`;
+    const step = span / 3;
+    const yLabels = [
+      formatFaNumber(Math.round(max)),
+      formatFaNumber(Math.round(min + step * 2)),
+      formatFaNumber(Math.round(min + step)),
+      formatFaNumber(Math.round(min)),
+    ];
+    return { linePath, areaPath, lastX: last.x, lastY: last.y, yLabels };
+  }, [ticks]);
 
   if (isDenied) {
     return (
@@ -86,12 +169,12 @@ export function Screen6Prices() {
               انتخاب ابزار معاملاتی
             </h2>
             <span className="text-[11px] font-semibold text-gold">
-              ۹ نماد فعال
+              {formatFaNumber(symbolChips.length)} نماد فعال
             </span>
           </div>
 
           <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-            {SYMBOL_CHIPS.map((chip) => {
+            {symbolChips.map((chip) => {
               const isActive = selectedSymbol === chip;
               return (
                 <button
@@ -127,7 +210,7 @@ export function Screen6Prices() {
             <div className="mt-1.5 flex flex-wrap items-baseline justify-between gap-2">
               <div className="flex items-baseline gap-1.5">
                 <span className="tabular-nums-fa text-2xl font-extrabold text-[#0B0E14]">
-                  ۴۴,۲۸۰,۰۰۰
+                  {liveBuyPrice !== null ? formatFaNumber(liveBuyPrice) : "۴۴,۲۸۰,۰۰۰"}
                 </span>
                 <span className="text-xs font-semibold text-slate-600">
                   تومان
@@ -175,8 +258,8 @@ export function Screen6Prices() {
             <div className="flex items-stretch gap-2">
               {/* Y-Axis */}
               <div className="flex flex-col justify-between py-1 text-[9px] font-semibold text-slate-400 tabular-nums-fa">
-                {Y_TICKS.map((tick) => (
-                  <span key={tick}>{tick}</span>
+                {chartGeometry.yLabels.map((tick, idx) => (
+                  <span key={`${tick}-${idx}`}>{tick}</span>
                 ))}
               </div>
 
@@ -225,13 +308,13 @@ export function Screen6Prices() {
 
                   {/* Light Red Area */}
                   <path
-                    d="M 4 102 L 48 92 L 96 76 L 146 66 L 198 42 L 250 22 L 250 112 L 4 112 Z"
+                    d={chartGeometry.areaPath}
                     fill="url(#redAreaGrad)"
                   />
 
                   {/* Rising Red Line */}
                   <path
-                    d="M 4 102 L 48 92 L 96 76 L 146 66 L 198 42 L 250 22"
+                    d={chartGeometry.linePath}
                     fill="none"
                     stroke="#EF4444"
                     strokeWidth="2.5"
@@ -241,8 +324,8 @@ export function Screen6Prices() {
 
                   {/* Red Endpoint Dot */}
                   <circle
-                    cx="250"
-                    cy="22"
+                    cx={chartGeometry.lastX}
+                    cy={chartGeometry.lastY}
                     r="5"
                     fill="#EF4444"
                     stroke="#FFFFFF"

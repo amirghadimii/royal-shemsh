@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Crown,
@@ -15,8 +15,28 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+function toFaDigits(value: string): string {
+  return value.replace(/\d/g, (d) => "۰۱۲۳۴۵۶۷۸۹"[Number(d)]);
+}
+
+function toRoleCategory(roleCode: string): Exclude<RoleFilter, "all"> {
+  if (roleCode === "ADMIN" || roleCode === "SYSTEM_MANAGER") return "admin";
+  if (roleCode === "GROUP_LEADER") return "leader";
+  if (roleCode === "TRADER") return "trader";
+  return "regular";
+}
+
+function toInitials(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`;
+  return fullName.trim().slice(0, 2) || "ک";
+}
 
 type RoleFilter = "all" | "admin" | "leader" | "trader" | "regular";
 
@@ -145,12 +165,65 @@ const ROLE_CHIPS: { id: RoleFilter; label: string }[] = [
 ];
 
 export function Screen27Users() {
+  const { accessDenied } = useEndpointAccess("/admin/users");
+  const [usersList, setUsersList] = useState<UserCardData[]>(USERS_LIST);
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [searchText, setSearchText] = useState("");
   const [codeText, setCodeText] = useState("");
 
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    fetch(`${API_BASE}/admin/users`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data?.users || !Array.isArray(data.users)) return;
+        const mapped: UserCardData[] = data.users.map(
+          (u: {
+            id: string;
+            code: number;
+            username: string;
+            fullName: string;
+            mobile: string;
+            email: string | null;
+            isActive: boolean;
+            role: { code: string; name: string };
+            groups?: { name: string }[];
+          }) => {
+            const cat = toRoleCategory(u.role.code);
+            const paddedCode = String(u.code).padStart(2, "0");
+            return {
+              id: u.id,
+              initials: toInitials(u.fullName),
+              name: u.fullName,
+              roleCategory: cat,
+              roleLabel: u.role.name,
+              username: u.username,
+              code: `${toFaDigits(paddedCode)}#`,
+              phone: toFaDigits(u.mobile),
+              email: u.email ?? "—",
+              extraLine:
+                u.groups && u.groups.length > 0
+                  ? `گروه‌ها: ${u.groups.map((g) => g.name).join("، ")}`
+                  : `وضعیت حساب: ${u.isActive ? "فعال" : "غیرفعال"}`,
+              hasWalletOrGroupBtn: cat === "admin" || cat === "leader",
+            };
+          }
+        );
+        setUsersList(mapped);
+      })
+      .catch(() => {});
+  }, [accessDenied]);
+
   const filteredUsers = useMemo(() => {
-    return USERS_LIST.filter((u) => {
+    return usersList.filter((u) => {
       if (roleFilter !== "all" && u.roleCategory !== roleFilter) return false;
       if (searchText.trim() !== "") {
         const q = searchText.trim().toLowerCase();
@@ -161,12 +234,28 @@ export function Screen27Users() {
           return false;
         }
       }
-      if (codeText.trim() !== "" && !u.code.includes(codeText.trim())) {
-        return false;
+      if (codeText.trim() !== "") {
+        const qCode = codeText.trim();
+        const faCode = toFaDigits(qCode);
+        if (!u.code.includes(qCode) && !u.code.includes(faCode)) {
+          return false;
+        }
       }
       return true;
     });
-  }, [roleFilter, searchText, codeText]);
+  }, [usersList, roleFilter, searchText, codeText]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   const getRoleIcon = (cat: UserCardData["roleCategory"]) => {
     if (cat === "admin") return Crown;

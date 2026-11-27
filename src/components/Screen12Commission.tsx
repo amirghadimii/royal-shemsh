@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Calendar,
@@ -13,6 +13,10 @@ import {
 import { AppShell } from "@/components/design-system";
 import { Screen19CommissionNoAccess } from "@/components/Screen19CommissionNoAccess";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 interface CommissionMember {
   name: string;
@@ -90,10 +94,58 @@ const COMMISSION_GROUPS: CommissionGroup[] = [
 
 export function Screen12Commission() {
   const searchParams = useSearchParams();
-  const isDenied = searchParams.get("access") === "denied";
+  const { accessDenied } = useEndpointAccess("/commission/report");
+  const isDenied = searchParams.get("access") === "denied" || accessDenied;
   const [fromDate, setFromDate] = useState("۱۴۰۵/۰۹/۰۴");
   const [toDate, setToDate] = useState("۱۴۰۵/۰۹/۰۴");
   const [selectedLeader, setSelectedLeader] = useState("all");
+  const [liveGroups, setLiveGroups] = useState<CommissionGroup[] | null>(null);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || isDenied) return;
+
+    fetch(`${API_BASE}/admin/reports/commission`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!Array.isArray(data?.groups) || data.groups.length === 0) return;
+        setLiveGroups(
+          data.groups.map(
+            (g: {
+              groupId: string;
+              groupNumber: number;
+              leaderName: string;
+              ratePerGramToman: string;
+              groupTotalToman: string;
+              members: {
+                name: string;
+                tradedWeight: string;
+                commissionToman: string;
+              }[];
+            }) => ({
+              id: g.groupId,
+              leader: g.leaderName,
+              code: `گروه: ${formatFaNumber(g.groupNumber)}`,
+              level: `نرخ پورسانت: ${formatFaNumber(Number(g.ratePerGramToman))} ت/گ`,
+              countLabel: `${formatFaNumber(g.members.length)} زیرمجموعه`,
+              members: g.members.map((m) => ({
+                name: m.name,
+                volume: `حجم: ${formatFaNumber(Number(m.tradedWeight))} گرم/واحد`,
+                commission: `+${formatFaNumber(Number(m.commissionToman))}`,
+              })),
+              groupTotal: `${formatFaNumber(Number(g.groupTotalToman))} تومان`,
+            })
+          )
+        );
+      })
+      .catch(() => {});
+  }, [isDenied]);
 
   if (isDenied) {
     return (
@@ -108,7 +160,7 @@ export function Screen12Commission() {
     );
   }
 
-  const visibleGroups = COMMISSION_GROUPS.filter(
+  const visibleGroups = (liveGroups ?? COMMISSION_GROUPS).filter(
     (g) => selectedLeader === "all" || g.id === selectedLeader
   );
 

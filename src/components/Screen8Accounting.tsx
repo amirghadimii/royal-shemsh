@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   Clock,
@@ -10,8 +10,12 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { AppShell } from "@/components/design-system";
+import { AppShell, NoAccessBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 type LedgerFilter = "all" | "creditor" | "debtor";
 
@@ -151,11 +155,71 @@ const LEDGER_ROWS: LedgerRow[] = [
 ];
 
 export function Screen8Accounting() {
+  const { accessDenied } = useEndpointAccess("/admin/accounting");
   const [filter, setFilter] = useState<LedgerFilter>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [rows, setRows] = useState<LedgerRow[]>(LEDGER_ROWS);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    const qs = new URLSearchParams({
+      filter,
+      ...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
+    });
+    fetch(`${API_BASE}/admin/accounting?${qs.toString()}`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!Array.isArray(data?.rows)) return;
+        setRows(
+          data.rows.map(
+            (r: {
+              id: string;
+              code: number;
+              name: string;
+              cashBalanceToman: string;
+              isDebtor: boolean;
+              goldGrams: string;
+              aed: string;
+              naghdeFarda: string;
+              emami86: string;
+              nimSekkeh: string;
+              usd: string;
+              euro: string;
+            }) => {
+              const cashNum = Number(r.cashBalanceToman);
+              const sign = cashNum > 0 ? "+" : "";
+              return {
+                id: r.id,
+                name: r.name,
+                code: formatFaNumber(r.code),
+                hazer: `${sign}${formatFaNumber(cashNum)}`,
+                isNegativeHazer: r.isDebtor,
+                goldGrams: formatFaNumber(Number(r.goldGrams)),
+                isNegativeGold: Number(r.goldGrams) < 0,
+                aed: formatFaNumber(Number(r.aed)),
+                naghdeFarda: formatFaNumber(Number(r.naghdeFarda)),
+                emami86: formatFaNumber(Number(r.emami86)),
+                nimSekkeh: formatFaNumber(Number(r.nimSekkeh)),
+                usd: formatFaNumber(Number(r.usd)),
+                euro: formatFaNumber(Number(r.euro)),
+              };
+            }
+          )
+        );
+      })
+      .catch(() => {});
+  }, [accessDenied, filter, searchQuery]);
 
   const filteredRows = useMemo(() => {
-    return LEDGER_ROWS.filter((row) => {
+    return rows.filter((row) => {
       if (filter === "creditor" && row.isNegativeHazer) return false;
       if (filter === "debtor" && !row.isNegativeHazer) return false;
       if (searchQuery.trim() !== "") {
@@ -164,7 +228,19 @@ export function Screen8Accounting() {
       }
       return true;
     });
-  }, [filter, searchQuery]);
+  }, [rows, filter, searchQuery]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell

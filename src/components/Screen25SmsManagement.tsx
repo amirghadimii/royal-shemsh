@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   Copy,
@@ -8,8 +8,12 @@ import {
   Send,
   ShieldCheck,
 } from "lucide-react";
-import { AppShell, ProposedBanner } from "@/components/design-system";
+import { AppShell, NoAccessBanner, ProposedBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
 
 const SMS_BODY =
   "همکار گرامی؛ معاملات تابلوی طلای آبشده و شمش رویال هم‌اکنون رأس ساعت ۱۰:۳۰ آغاز شد. جهت مشاهده مظنه‌ها و ثبت سفارشات به سامانه مراجعه فرمایید.";
@@ -36,7 +40,62 @@ const HISTORY_ROWS = [
 ];
 
 export function Screen25SmsManagement() {
+  const { accessDenied } = useEndpointAccess("/admin/sms-rules");
   const [copied, setCopied] = useState(false);
+  const [manualRuleId, setManualRuleId] = useState<string | null>(null);
+  const [sentCount, setSentCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+    fetch(`${API_BASE}/admin/sms-rules`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        const manual = data?.rules?.find(
+          (r: { triggerType: string }) => r.triggerType === "MANUAL"
+        );
+        if (manual?.id) setManualRuleId(manual.id);
+      })
+      .catch(() => {});
+  }, [accessDenied]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
+
+  const handleManualSend = async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || !manualRuleId) return;
+    const res = await fetch(
+      `${API_BASE}/admin/sms-rules/${manualRuleId}/send-manual`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
+      }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      setSentCount(data.count ?? 0);
+    }
+  };
 
   return (
     <AppShell
@@ -134,10 +193,15 @@ export function Screen25SmsManagement() {
 
           <button
             type="button"
+            onClick={() => void handleManualSend()}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-gold py-3 text-xs font-extrabold text-bg-primary hover:opacity-90 cursor-pointer"
           >
             <Send className="h-4 w-4" aria-hidden="true" />
-            <span>ارسال دستی پیامک به ۱۴۲ کاربر</span>
+            <span>
+              {sentCount !== null
+                ? `ثبت نمایشی برای ${formatFaNumber(sentCount)} کاربر انجام شد (STUB)`
+                : "ارسال دستی پیامک به کاربران فعال"}
+            </span>
           </button>
 
           <p className="text-center text-[10px] text-text-muted">

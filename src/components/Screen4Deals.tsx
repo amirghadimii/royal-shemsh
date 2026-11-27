@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2,
   FileSpreadsheet,
@@ -12,6 +12,38 @@ import {
 } from "lucide-react";
 import { AppShell } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface LiveTradeItem {
+  id: string;
+  tradeCode: string;
+  side: "BUY" | "SELL";
+  quantity: string;
+  unitPrice: string;
+  totalAmount: string;
+  status: "APPROVED" | "REJECTED" | "PENDING" | "NO_RESPONSE";
+  audited: boolean;
+  createdAt: string;
+  user?: { fullName: string };
+  product: { name: string; unit: string };
+}
+
+interface LiveLedgerEntry {
+  id: string;
+  documentNumber: string;
+  entryType: string;
+  rialAmount: string;
+  goldGrams: string;
+  description: string;
+  createdAt: string;
+}
+
+interface LiveAccountingSummary {
+  cashBalanceToman: string;
+  totalGoldGrams: string;
+}
 
 type DealsTab = "trades" | "accounting";
 type DateChip = "today" | "week" | "month" | "calendar";
@@ -45,6 +77,101 @@ export function Screen4Deals() {
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [statusChip, setStatusChip] = useState<OrderStatusChip>("all");
   const [auditChip, setAuditChip] = useState<AuditChip>("all");
+  const [isAdminSession, setIsAdminSession] = useState(false);
+  const [liveTrades, setLiveTrades] = useState<LiveTradeItem[] | null>(null);
+  const [accountingSummary, setAccountingSummary] =
+    useState<LiveAccountingSummary | null>(null);
+  const [ledgerEntries, setLedgerEntries] = useState<LiveLedgerEntry[]>([]);
+
+  const loadDealsData = useCallback(async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+
+    try {
+      const meRes = await fetch(`${API_BASE}/auth/me`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const meJson = meRes.ok ? await meRes.json() : null;
+      const admin =
+        meJson?.user?.role?.code === "ADMIN" ||
+        meJson?.user?.role?.code === "SYSTEM_MANAGER";
+      setIsAdminSession(admin);
+
+      const statusParam =
+        statusChip === "no-response" ? "NO_RESPONSE" : statusChip;
+      const qs = new URLSearchParams({
+        range: dateChip === "calendar" ? "month" : dateChip,
+        ...(statusChip !== "all" ? { status: statusParam } : {}),
+        ...(auditChip !== "all" ? { audit: auditChip } : {}),
+        ...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
+      });
+
+      const [tradesRes, accRes] = await Promise.all([
+        fetch(`${API_BASE}${admin ? "/trades" : "/trades/mine"}?${qs.toString()}`, {
+          credentials: "include",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE}/accounting/mine`, {
+          credentials: "include",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+
+      if (tradesRes.ok) {
+        const tj = await tradesRes.json();
+        if (Array.isArray(tj?.trades)) setLiveTrades(tj.trades);
+      }
+      if (accRes.ok) {
+        const aj = await accRes.json();
+        if (aj?.summary) setAccountingSummary(aj.summary);
+        if (Array.isArray(aj?.entries)) setLedgerEntries(aj.entries);
+      }
+    } catch {
+      // keep sample fallback
+    }
+  }, [dateChip, statusChip, auditChip, searchQuery]);
+
+  useEffect(() => {
+    void loadDealsData();
+  }, [loadDealsData]);
+
+  const handleToggleAudit = async (tradeId: string) => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || !isAdminSession) return;
+    await fetch(`${API_BASE}/trades/${tradeId}/audit`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    await loadDealsData();
+  };
+
+  const handleExportCsv = async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    const res = await fetch(`${API_BASE}/accounting/mine/export`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ledger-mine.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const showRow1 =
     (statusChip === "all" || statusChip === "approved") &&
@@ -190,7 +317,78 @@ export function Screen4Deals() {
               </span>
             </div>
 
-            {/* Sample Trade Rows */}
+            {/* Trade Rows (Live when authenticated, Sample fallback otherwise) */}
+            {liveTrades !== null ? (
+              <div className="space-y-2.5">
+                {liveTrades.length === 0 ? (
+                  <p className="rounded-2xl border border-dashed border-border-subtle bg-bg-card p-6 text-center text-xs text-text-secondary">
+                    معامله‌ای با فیلترهای انتخابی یافت نشد.
+                  </p>
+                ) : (
+                  liveTrades.map((t) => (
+                    <article
+                      key={t.id}
+                      className="rounded-2xl border border-border-subtle bg-bg-card p-3.5 space-y-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-text-primary">
+                              {t.product.name}
+                            </span>
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                                t.side === "BUY"
+                                  ? "bg-buy-soft text-buy"
+                                  : "bg-sell-soft text-sell"
+                              }`}
+                            >
+                              {t.side === "BUY" ? "خرید" : "فروش"}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-text-secondary">
+                            طرف حساب: {t.user?.fullName ?? "شما"} • کد {t.tradeCode}
+                          </p>
+                        </div>
+                        <span className="text-[10px] font-bold text-buy">
+                          {t.status === "APPROVED" ? "تایید شده" : t.status}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1 rounded-xl bg-bg-primary/65 p-2.5 text-[11px]">
+                        <div className="flex items-center justify-between">
+                          <span className="text-text-secondary">مقدار مبادله:</span>
+                          <span className="tabular-nums-fa font-semibold text-text-primary">
+                            {formatFaNumber(Number(t.quantity))} {t.product.unit}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-text-secondary">مبلغ تسویه (تومان):</span>
+                          <span className="tabular-nums-fa font-bold text-buy">
+                            {formatFaNumber(Number(t.totalAmount))}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-text-secondary">
+                          {t.audited ? "حسابرسی شده" : "حسابرسی نشده"}
+                        </span>
+                        {isAdminSession ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleAudit(t.id)}
+                            className="rounded-lg border border-gold/35 bg-gold-soft px-3 py-1 text-[11px] font-bold text-gold cursor-pointer"
+                          >
+                            {t.audited ? "لغو حسابرسی" : "تایید حسابرسی"}
+                          </button>
+                        ) : null}
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            ) : (
             <div className="space-y-2.5">
               {showRow1 ? (
                 <article className="rounded-2xl border border-border-subtle bg-bg-card p-3.5 space-y-2.5">
@@ -363,6 +561,7 @@ export function Screen4Deals() {
                 </article>
               ) : null}
             </div>
+            )}
           </>
         ) : null}
 
@@ -387,7 +586,9 @@ export function Screen4Deals() {
                   مانده ریالی قابل معامله
                 </span>
                 <span className="tabular-nums-fa text-xs font-extrabold text-buy">
-                  ۵۸۰,۴۰۰,۰۰۰ تومان
+                  {accountingSummary
+                    ? `${formatFaNumber(Number(accountingSummary.cashBalanceToman))} تومان`
+                    : "۵۸۰,۴۰۰,۰۰۰ تومان"}
                 </span>
               </div>
               <p className="mt-1 text-[10px] text-text-muted">
@@ -398,14 +599,16 @@ export function Screen4Deals() {
             <div className="rounded-xl border border-border-subtle bg-bg-primary/70 p-3">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] text-text-secondary">
-                  ارزش دارایی طلا
+                  مانده وزن طلا / کالا
                 </span>
                 <span className="tabular-nums-fa text-xs font-extrabold text-gold">
-                  ۱,۴۵۰,۰۰۰,۰۰۰
+                  {accountingSummary
+                    ? `${formatFaNumber(Number(accountingSummary.totalGoldGrams))} گرم`
+                    : "۱,۴۵۰,۰۰۰,۰۰۰"}
                 </span>
               </div>
               <p className="mt-1 text-[10px] text-text-muted">
-                معادل ۳۲.۸ گرم طلای ۲۴
+                محاسبه‌شده مستقیم از اسناد دفتر کل
               </p>
             </div>
 
@@ -459,13 +662,32 @@ export function Screen4Deals() {
             <strong className="tabular-nums-fa text-gold">۱۴۰۵/۰۹/۰۴</strong>
           </div>
 
+          {ledgerEntries.length > 0 ? (
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {ledgerEntries.slice(0, 10).map((e) => (
+                <div
+                  key={e.id}
+                  className="flex items-center justify-between gap-2 rounded-xl bg-bg-primary/65 px-3 py-2 text-[11px]"
+                >
+                  <span className="truncate text-text-primary">{e.description}</span>
+                  <span className="tabular-nums-fa shrink-0 font-bold text-gold">
+                    {Number(e.rialAmount) > 0
+                      ? `${formatFaNumber(Number(e.rialAmount))} ت`
+                      : `${formatFaNumber(Number(e.goldGrams))} گ`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="space-y-2">
             <button
               type="button"
+              onClick={() => void handleExportCsv()}
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-buy py-2.5 text-xs font-extrabold text-white hover:opacity-90 cursor-pointer"
             >
               <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-              <span>دریافت خروجی اکسل اسناد (XLSX)</span>
+              <span>دریافت خروجی اکسل اسناد (CSV)</span>
             </button>
             <button
               type="button"

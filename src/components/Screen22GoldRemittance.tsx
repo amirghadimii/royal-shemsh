@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2,
   Inbox,
@@ -8,16 +8,137 @@ import {
   UserCheck,
   Vault,
 } from "lucide-react";
-import { AppShell, ProposedBanner } from "@/components/design-system";
+import { AppShell, NoAccessBanner, ProposedBanner } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
+import { formatFaNumber } from "@/lib/format";
+import { useEndpointAccess } from "@/lib/useEndpointAccess";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
+interface RemittanceRow {
+  id: string;
+  remittanceCode: string;
+  type: "GOLD_WEIGHT" | "CASH_RIAL";
+  weightGrams: string;
+  cashAmount: string;
+  warehouse: string;
+  user: { fullName: string };
+  product?: { name: string; unit: string } | null;
+}
 
 export function Screen22GoldRemittance() {
+  const { accessDenied } = useEndpointAccess("/admin/remittances");
   const [remittanceType, setRemittanceType] = useState<"gold" | "cash">("gold");
-  const [weightText, setWeightText] = useState("۵۰ گرم");
+  const [weightText, setWeightText] = useState("50");
   const [noteText, setNoteText] = useState(
     "بابت تسویه فاکتور شماره ۹۸۲۴ - تحویل فیزیکی با بارکد پلمپ امنیتی"
   );
-  const [submitted, setSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [users, setUsers] = useState<{ id: string; fullName: string }[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [products, setProducts] = useState<{ id: string; name: string }[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [remittances, setRemittances] = useState<RemittanceRow[]>([]);
+
+  const loadData = useCallback(async () => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || accessDenied) return;
+
+    const [uRes, pRes, rRes] = await Promise.all([
+      fetch(`${API_BASE}/admin/users`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${API_BASE}/admin/products`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${API_BASE}/admin/remittances`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => (r.ok ? r.json() : null)),
+    ]);
+
+    if (Array.isArray(uRes?.users) && uRes.users.length > 0) {
+      setUsers(uRes.users);
+      setSelectedUserId((prev) => prev || uRes.users[0].id);
+    }
+    if (Array.isArray(pRes?.products) && pRes.products.length > 0) {
+      setProducts(pRes.products);
+      setSelectedProductId((prev) => prev || pRes.products[0].id);
+    }
+    if (Array.isArray(rRes?.remittances)) {
+      setRemittances(rRes.remittances);
+    }
+  }, [accessDenied]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  if (accessDenied) {
+    return (
+      <AppShell
+        activeTab="more"
+        userName={SAMPLE_USER.fullName}
+        isOnline={SAMPLE_USER.isOnline}
+      >
+        <NoAccessBanner />
+      </AppShell>
+    );
+  }
+
+  const handleRemittanceSubmit = async () => {
+    setSubmitted(null);
+    setErrorMsg(null);
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token || !selectedUserId) {
+      setSubmitted("حواله طلایی نمونه ثبت نمایشی شد.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const numeric = weightText
+        .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+        .replace(/[^\d.]/g, "");
+      const res = await fetch(`${API_BASE}/admin/remittances`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          userId: selectedUserId,
+          type: remittanceType === "gold" ? "GOLD_WEIGHT" : "CASH_RIAL",
+          productId: remittanceType === "gold" ? selectedProductId : undefined,
+          weightGrams: remittanceType === "gold" ? numeric : undefined,
+          cashAmount: remittanceType === "cash" ? numeric : undefined,
+          barcodeNote: noteText,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data?.message ?? "خطا در ثبت حواله");
+        return;
+      }
+      setSubmitted(`حواله ${data.remittance.remittanceCode} با موفقیت ثبت شد.`);
+      await loadData();
+    } catch {
+      setErrorMsg("خطا در ارتباط با سرور");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <AppShell
@@ -151,21 +272,62 @@ export function Screen22GoldRemittance() {
 
           <button
             type="button"
-            onClick={() => setSubmitted(true)}
-            className="w-full rounded-xl bg-gold py-3 text-xs font-extrabold text-bg-primary hover:opacity-90 cursor-pointer"
+            disabled={submitting}
+            onClick={() => void handleRemittanceSubmit()}
+            className="w-full rounded-xl bg-gold py-3 text-xs font-extrabold text-bg-primary hover:opacity-90 disabled:opacity-50 cursor-pointer"
           >
-            ثبت حواله طلایی
+            {submitting ? "در حال ثبت..." : "ثبت حواله طلایی"}
           </button>
+
+          {users.length > 0 ? (
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                aria-label="کاربر حواله"
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="rounded-xl border border-border-subtle bg-bg-primary px-2.5 py-1.5 text-[11px] text-text-primary"
+              >
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.fullName}
+                  </option>
+                ))}
+              </select>
+              {remittanceType === "gold" && products.length > 0 ? (
+                <select
+                  aria-label="کالای حواله"
+                  value={selectedProductId}
+                  onChange={(e) => setSelectedProductId(e.target.value)}
+                  className="rounded-xl border border-border-subtle bg-bg-primary px-2.5 py-1.5 text-[11px] text-text-primary"
+                >
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+          ) : null}
+
+          {errorMsg ? (
+            <p
+              role="alert"
+              className="rounded-xl bg-sell-soft px-3 py-2 text-center text-xs font-bold text-sell"
+            >
+              {errorMsg}
+            </p>
+          ) : null}
 
           {submitted ? (
             <p className="flex items-center justify-center gap-1.5 rounded-xl bg-buy-soft px-3 py-2 text-xs font-bold text-buy">
               <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-              حواله طلایی نمونه ثبت نمایشی شد.
+              {submitted}
             </p>
           ) : null}
         </section>
 
-        {/* Today's Remittances Empty List */}
+        {/* Today's Remittances List */}
         <section className="rounded-2xl border border-border-subtle bg-bg-card p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-xs font-extrabold text-text-primary">
@@ -176,16 +338,43 @@ export function Screen22GoldRemittance() {
             </span>
           </div>
 
-          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border-subtle bg-bg-primary/60 px-4 py-7 text-center">
-            <Inbox className="h-6 w-6 text-text-muted" aria-hidden="true" />
-            <p className="mt-2 text-xs font-bold text-text-primary">
-              حواله{"\u200c"}ای ثبت نشده است
-            </p>
-            <p className="mt-1 text-[11px] leading-relaxed text-text-secondary">
-              هیچ حواله طلایی یا ریالی برای کاربر انتخاب{"\u200c"}شده در تاریخ
-              امروز ثبت نگردیده است.
-            </p>
-          </div>
+          {remittances.length > 0 ? (
+            <div className="space-y-2">
+              {remittances.slice(0, 10).map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-center justify-between gap-2 rounded-xl bg-bg-primary/70 px-3 py-2 text-xs"
+                >
+                  <div>
+                    <p className="font-bold text-text-primary">
+                      {r.user.fullName} ({r.remittanceCode})
+                    </p>
+                    <p className="text-[10px] text-text-secondary">
+                      {r.type === "GOLD_WEIGHT"
+                        ? `${r.product?.name ?? "طلا"}`
+                        : "حواله ریالی"}
+                    </p>
+                  </div>
+                  <span className="tabular-nums-fa font-extrabold text-gold">
+                    {r.type === "GOLD_WEIGHT"
+                      ? `${formatFaNumber(Number(r.weightGrams))} گرم`
+                      : `${formatFaNumber(Number(r.cashAmount))} ت`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border-subtle bg-bg-primary/60 px-4 py-7 text-center">
+              <Inbox className="h-6 w-6 text-text-muted" aria-hidden="true" />
+              <p className="mt-2 text-xs font-bold text-text-primary">
+                حواله{"\u200c"}ای ثبت نشده است
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-text-secondary">
+                هیچ حواله طلایی یا ریالی برای کاربر انتخاب{"\u200c"}شده در تاریخ
+                امروز ثبت نگردیده است.
+              </p>
+            </div>
+          )}
 
           <p className="tabular-nums-fa text-center text-[10px] text-text-muted">
             آخرین به{"\u200c"}روزرسانی لحظه{"\u200c"}ای: ۱۰:۴۲:۱۵

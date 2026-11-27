@@ -6,3 +6,461 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum OrderStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+  SETTLED
+}
+
+enum PreOrderStatus {
+  ACTIVE
+  EXECUTED
+  CANCELLED
+  EXPIRED
+}
+
+enum TradeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  NO_RESPONSE
+}
+
+enum LedgerEntryType {
+  CREDIT
+  DEBIT
+  GOLD_IN
+  GOLD_OUT
+  COMMISSION
+}
+
+enum RemittanceType {
+  GOLD_WEIGHT
+  CASH_RIAL
+}
+
+enum RemittanceStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum AttachmentDocType {
+  NATIONAL_ID
+  BUSINESS_LICENSE
+  BROKERAGE_CONTRACT
+  BANK_CONFIRMATION
+}
+
+enum AttachmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum NotificationCategory {
+  NORMAL
+  OFFICIAL_CIRCULAR
+  SYMBOL_HALT
+  VOLATILITY_ALERT
+}
+
+enum NotificationColor {
+  GOLD
+  GREEN
+  RED
+  BLUE
+}
+
+enum SmsTriggerType {
+  MANUAL
+  AUTO_SYSTEM
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  level       Int
+  description String
+  createdAt   DateTime @default(now())
+  users       User[]
+
+  @@map("roles")
+}
+
+model User {
+  id                String            @id @default(cuid())
+  code              Int               @unique
+  username          String            @unique
+  fullName          String
+  mobile            String            @unique
+  email             String?
+  passwordHash      String?
+  roleId            String
+  role              Role              @relation(fields: [roleId], references: [id])
+  isActive          Boolean           @default(true)
+  isOnline          Boolean           @default(false)
+  twoFactorEnabled  Boolean           @default(true)
+  creditLimitToman  Decimal           @default(0) @db.Decimal(20, 0)
+  goldBalanceGrams  Decimal           @default(0) @db.Decimal(18, 4)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  groupMemberships  UserGroupMember[]
+  orders            Order[]
+  preOrders         PreOrder[]        @relation("PreOrderOwner")
+  manualPreOrders   PreOrder[]        @relation("PreOrderAdmin")
+  trades            Trade[]
+  ledgerEntries     LedgerEntry[]
+  remittances       Remittance[]
+  attachments         Attachment[] @relation("AttachmentOwner")
+  uploadedAttachments Attachment[] @relation("AttachmentUploader")
+  notifications       Notification[]
+
+  @@map("users")
+}
+
+model UserGroup {
+  id                  String             @id @default(cuid())
+  number              Int                @unique
+  name                String
+  description         String
+  leaderName          String?
+  commissionRateToman Decimal            @default(65000) @db.Decimal(18, 0)
+  isActive            Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  members             UserGroupMember[]
+  products            UserGroupProduct[]
+
+  @@map("user_groups")
+}
+
+model UserGroupMember {
+  id        String    @id @default(cuid())
+  userId    String
+  groupId   String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group     UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  joinedAt  DateTime  @default(now())
+
+  @@unique([userId, groupId])
+  @@map("user_group_members")
+}
+
+model ProductGroup {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  sortOrder Int       @default(0)
+  products  Product[]
+
+  @@map("product_groups")
+}
+
+model Product {
+  id             String       @id @default(cuid())
+  code           String       @unique
+  name           String
+  badge          String
+  subtitle       String
+  unit           String
+  purity         String?
+  productGroupId String
+  productGroup   ProductGroup @relation(fields: [productGroupId], references: [id])
+  buyPrice       Decimal      @db.Decimal(18, 0)
+  sellPrice      Decimal      @db.Decimal(18, 0)
+  minOrder       Decimal      @db.Decimal(18, 4)
+  maxOrder       Decimal      @db.Decimal(18, 4)
+  sortOrder      Int          @default(0)
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  priceTicks     PriceTick[]
+  orders         Order[]
+  preOrders      PreOrder[]
+  trades         Trade[]
+  groupAccess    UserGroupProduct[]
+  homeGoldOutbox HomeGoldOutbox[]
+  ledgerEntries  LedgerEntry[]
+  remittances    Remittance[]
+
+  @@map("products")
+}
+
+model UserGroupProduct {
+  id        String    @id @default(cuid())
+  groupId   String
+  productId String
+  group     UserGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, productId])
+  @@map("user_group_products")
+}
+
+model PriceTick {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  buyPrice   Decimal  @db.Decimal(18, 0)
+  sellPrice  Decimal  @db.Decimal(18, 0)
+  source     String   @default("STAGING_SEED")
+  recordedAt DateTime @default(now())
+
+  @@index([productId, recordedAt])
+  @@map("price_ticks")
+}
+
+model HomeGoldOutbox {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  buyPrice  Decimal  @db.Decimal(18, 0)
+  sellPrice Decimal  @db.Decimal(18, 0)
+  mode      String   @default("3")
+  status    String   @default("QUEUED_STUB")
+  createdAt DateTime @default(now())
+
+  @@index([productId, createdAt])
+  @@map("homegold_outbox")
+}
+
+model Order {
+  id              String      @id @default(cuid())
+  quoteCode       String      @unique
+  userId          String
+  productId       String
+  user            User        @relation(fields: [userId], references: [id])
+  product         Product     @relation(fields: [productId], references: [id])
+  side            TradeSide
+  quantity        Decimal     @db.Decimal(18, 4)
+  unitPrice       Decimal     @db.Decimal(18, 0)
+  totalAmount     Decimal     @db.Decimal(20, 0)
+  status          OrderStatus @default(PENDING_APPROVAL)
+  rejectionReason String?
+  clientRequestId String?
+  expiresAt       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  trades          Trade[]
+
+  @@unique([userId, clientRequestId])
+  @@index([userId, status])
+  @@map("orders")
+}
+
+model PreOrder {
+  id               String         @id @default(cuid())
+  userId           String
+  productId        String
+  createdByAdminId String?
+  user             User           @relation("PreOrderOwner", fields: [userId], references: [id])
+  product          Product        @relation(fields: [productId], references: [id])
+  createdByAdmin   User?          @relation("PreOrderAdmin", fields: [createdByAdminId], references: [id])
+  side             TradeSide
+  targetPrice      Decimal        @db.Decimal(18, 0)
+  weightGrams      Decimal        @db.Decimal(18, 4)
+  feeAmount        Decimal        @default(0) @db.Decimal(18, 0)
+  totalAmount      Decimal        @db.Decimal(20, 0)
+  status           PreOrderStatus @default(ACTIVE)
+  isManual         Boolean        @default(false)
+  expiresAt        DateTime?
+  createdAt        DateTime       @default(now())
+
+  @@index([userId, status])
+  @@map("pre_orders")
+}
+
+model Trade {
+  id              String        @id @default(cuid())
+  tradeCode       String        @unique
+  orderId         String?
+  userId          String
+  productId       String
+  order           Order?        @relation(fields: [orderId], references: [id])
+  user            User          @relation(fields: [userId], references: [id])
+  product         Product       @relation(fields: [productId], references: [id])
+  side            TradeSide
+  quantity        Decimal       @db.Decimal(18, 4)
+  unitPrice       Decimal       @db.Decimal(18, 0)
+  totalAmount     Decimal       @db.Decimal(20, 0)
+  settlementTerm  String
+  audited         Boolean       @default(false)
+  status          TradeStatus   @default(PENDING)
+  rejectionReason String?
+  createdAt       DateTime      @default(now())
+  ledgerEntries   LedgerEntry[]
+
+  @@index([userId, status])
+  @@map("trades")
+}
+
+model LedgerEntry {
+  id             String          @id @default(cuid())
+  documentNumber String          @unique
+  userId         String
+  tradeId        String?
+  productId      String?
+  user           User            @relation(fields: [userId], references: [id])
+  trade          Trade?          @relation(fields: [tradeId], references: [id])
+  product        Product?        @relation(fields: [productId], references: [id])
+  entryType      LedgerEntryType
+  rialAmount     Decimal         @default(0) @db.Decimal(20, 0)
+  goldGrams      Decimal         @default(0) @db.Decimal(18, 4)
+  description    String
+  isFinalized    Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+
+  @@index([userId, createdAt])
+  @@map("ledger_entries")
+}
+
+model Remittance {
+  id             String           @id @default(cuid())
+  remittanceCode String           @unique
+  userId         String
+  productId      String?
+  user           User             @relation(fields: [userId], references: [id])
+  product        Product?         @relation(fields: [productId], references: [id])
+  type           RemittanceType
+  weightGrams    Decimal          @default(0) @db.Decimal(18, 4)
+  cashAmount     Decimal          @default(0) @db.Decimal(20, 0)
+  warehouse      String
+  barcodeNote    String?
+  status         RemittanceStatus @default(PENDING)
+  createdAt      DateTime         @default(now())
+
+  @@map("remittances")
+}
+
+model Attachment {
+  id           String            @id @default(cuid())
+  userId       String
+  user         User              @relation("AttachmentOwner", fields: [userId], references: [id])
+  uploadedById String?
+  uploadedBy   User?             @relation("AttachmentUploader", fields: [uploadedById], references: [id])
+  docType      AttachmentDocType
+  title        String
+  fileName     String
+  storedName   String?
+  mimeType     String
+  sizeBytes    Int
+  status       AttachmentStatus  @default(PENDING)
+  uploadedAt   DateTime          @default(now())
+
+  @@map("attachments")
+}
+
+model Notification {
+  id            String               @id @default(cuid())
+  userId        String?
+  user          User?                @relation(fields: [userId], references: [id])
+  title         String
+  body          String
+  category      NotificationCategory @default(NORMAL)
+  priorityColor NotificationColor    @default(GOLD)
+  onlineOnly    Boolean              @default(true)
+  isPinned      Boolean              @default(false)
+  audienceLabel String               @default("ارسال برای همه")
+  createdAt     DateTime             @default(now())
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model SmsLog {
+  id        String   @id @default(cuid())
+  userId    String
+  orderId   String?
+  ruleCode  String
+  ruleTitle String
+  mobile    String
+  body      String
+  status    String   @default("STUB")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@map("sms_logs")
+}
+
+model InternalMessage {
+  id            String                     @id @default(cuid())
+  title         String
+  body          String
+  category      NotificationCategory       @default(NORMAL)
+  priorityColor NotificationColor          @default(GOLD)
+  audience      String                     @default("ALL")
+  createdById   String?
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+  recipients    InternalMessageRecipient[]
+
+  @@index([category, createdAt])
+  @@map("internal_messages")
+}
+
+model InternalMessageRecipient {
+  id        String          @id @default(cuid())
+  messageId String
+  userId    String
+  isRead    Boolean         @default(false)
+  readAt    DateTime?
+  createdAt DateTime        @default(now())
+  message   InternalMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId, createdAt])
+  @@map("internal_message_recipients")
+}
+
+model SmsRule {
+  id               String         @id @default(cuid())
+  code             String         @unique
+  title            String
+  triggerType      SmsTriggerType
+  triggerCondition String
+  templateText     String
+  extraNote        String?
+  isActive         Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+
+  @@map("sms_rules")
+}
+
+model Setting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("settings")
+}
+
+model ShadowLog {
+  id          String    @id @default(cuid())
+  action      String
+  orderId     String?
+  userId      String
+  productId   String
+  side        TradeSide
+  quantity    Decimal   @db.Decimal(18, 4)
+  unitPrice   Decimal   @db.Decimal(18, 0)
+  totalAmount Decimal   @db.Decimal(20, 0)
+  status      String
+  details     String?
+  createdAt   DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([orderId])
+  @@map("shadow_logs")
+}
