@@ -82,7 +82,7 @@ export function loadEnvConfig(
 
   return {
     env: rawEnv,
-    port: Number(source.BACKEND_PORT ?? 4001),
+    port: Number(source.PORT ?? source.BACKEND_PORT ?? 4001),
     frontendOrigin: source.FRONTEND_ORIGIN ?? "http://localhost:3000",
     databaseUrl,
     redisUrl,

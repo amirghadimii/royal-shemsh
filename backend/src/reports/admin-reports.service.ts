@@ -1,4 +1,9 @@
-import { Inject, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import {
   LedgerEntryType,
   Prisma,
@@ -457,6 +462,118 @@ export class AdminReportsService {
       date: targetDay,
       cutoff: cutoff.toISOString(),
       rows,
+    };
+  }
+
+  async getStopLossReport() {
+    const [users, entries] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          username: { not: "system_treasury" },
+          role: { code: "REGULAR" },
+        },
+        orderBy: { code: "asc" },
+        select: {
+          id: true,
+          code: true,
+          fullName: true,
+          mobile: true,
+          isActive: true,
+          creditLimitToman: true,
+        },
+      }),
+      this.prisma.ledgerEntry.findMany({
+        select: {
+          userId: true,
+          entryType: true,
+          rialAmount: true,
+          goldGrams: true,
+        },
+      }),
+    ]);
+
+    const balances = new Map<
+      string,
+      { rial: Prisma.Decimal; gold: Prisma.Decimal }
+    >();
+    for (const e of entries) {
+      const b = balances.get(e.userId) ?? {
+        rial: new Prisma.Decimal(0),
+        gold: new Prisma.Decimal(0),
+      };
+      if (e.entryType === LedgerEntryType.CREDIT) b.rial = b.rial.plus(e.rialAmount);
+      else if (e.entryType === LedgerEntryType.DEBIT) b.rial = b.rial.minus(e.rialAmount);
+      else if (e.entryType === LedgerEntryType.GOLD_IN) b.gold = b.gold.plus(e.goldGrams);
+      else if (e.entryType === LedgerEntryType.GOLD_OUT) b.gold = b.gold.minus(e.goldGrams);
+      balances.set(e.userId, b);
+    }
+
+    const customers = users.map((u) => {
+      const b = balances.get(u.id) ?? {
+        rial: new Prisma.Decimal(0),
+        gold: new Prisma.Decimal(0),
+      };
+      const limit = u.creditLimitToman;
+      const debt = b.rial.lt(0) ? b.rial.abs() : new Prisma.Decimal(0);
+      let status: "SAFE" | "WARNING" | "BREACHED" = "SAFE";
+      if (limit.gt(0)) {
+        if (debt.gt(limit)) status = "BREACHED";
+        else if (debt.gte(limit.mul("0.8"))) status = "WARNING";
+      }
+      return {
+        userId: u.id,
+        code: u.code,
+        fullName: u.fullName,
+        mobile: u.mobile,
+        isActive: u.isActive,
+        rialBalance: b.rial.toFixed(0),
+        goldGramsBalance: b.gold.toFixed(4),
+        creditLimitToman: limit.toFixed(0),
+        debtToman: debt.toFixed(0),
+        status,
+      };
+    });
+
+    return {
+      customers,
+      summary: {
+        total: customers.length,
+        breached: customers.filter((c) => c.status === "BREACHED").length,
+        warning: customers.filter((c) => c.status === "WARNING").length,
+        safe: customers.filter((c) => c.status === "SAFE").length,
+      },
+    };
+  }
+
+  async updateUserStopLoss(userId: string, rawLimit: string | number) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException("کاربر یافت نشد");
+    }
+    let limit: Prisma.Decimal;
+    try {
+      limit = new Prisma.Decimal(String(rawLimit ?? "").trim());
+    } catch {
+      throw new BadRequestException("مبلغ حد ضرر / سقف اعتبار معتبر نیست");
+    }
+    if (!limit.isFinite() || limit.lt(0)) {
+      throw new BadRequestException("مبلغ حد ضرر باید عددی نامنفی باشد");
+    }
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { creditLimitToman: limit.toDecimalPlaces(0) },
+      select: {
+        id: true,
+        fullName: true,
+        creditLimitToman: true,
+      },
+    });
+    return {
+      user: {
+        id: updated.id,
+        fullName: updated.fullName,
+        creditLimitToman: updated.creditLimitToman.toFixed(0),
+      },
     };
   }
 }

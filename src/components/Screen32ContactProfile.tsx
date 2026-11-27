@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   CheckCircle2,
   KeyRound,
@@ -12,14 +13,55 @@ import {
 import { AppShell } from "@/components/design-system";
 import { SAMPLE_USER } from "@/data/sample";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4001";
+
 export function Screen32ContactProfile() {
+  const [userName, setUserName] = useState(SAMPLE_USER.fullName);
+  const [userMeta, setUserMeta] = useState<{
+    username?: string;
+    mobile?: string;
+    roleName?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    fetch(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.user?.fullName) {
+          setUserName(data.user.fullName);
+          setUserMeta({
+            username: data.user.username,
+            mobile: data.user.mobile,
+            roleName: data.user.role?.name,
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <AppShell
       activeTab="more"
-      userName={SAMPLE_USER.fullName}
+      userName={userName}
       isOnline={SAMPLE_USER.isOnline}
     >
       <div className="space-y-3.5">
+        {userMeta ? (
+          <section className="rounded-2xl border border-gold/30 bg-bg-card p-3.5 text-xs space-y-1">
+            <p className="font-extrabold text-gold">{userName}</p>
+            <p className="text-[11px] text-text-secondary">
+              نام کاربری: {userMeta.username} | موبایل: {userMeta.mobile} | نقش:{" "}
+              {userMeta.roleName ?? "کاربر"}
+            </p>
+          </section>
+        ) : null}
         {/* Top Strip with Gold "R" Shield Logo & ۹۹۹.۹ */}
         <section className="flex items-center justify-between gap-2 rounded-2xl border border-gold/30 bg-bg-card px-3.5 py-2.5">
           <div className="flex items-center gap-2.5 min-w-0">

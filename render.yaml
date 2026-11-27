@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: royalshemsh-staging-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /board/status
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: ALLOW_SAMPLE_SEED
+        value: "true"
+      - key: ALLOW_TRADE_TESTS
+        value: "true"
+      - key: FRONTEND_ORIGIN
+        value: https://amirghadimii.github.io,http://localhost:3000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: royalshemsh-staging-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: royalshemsh-staging-redis
+          property: connectionString
+
+  - type: redis
+    name: royalshemsh-staging-redis
+    plan: free
+    ipAllowList: []
+
+databases:
+  - name: royalshemsh-staging-db
+    plan: free
+    databaseName: royalshemsh_staging
+    user: royalshemsh

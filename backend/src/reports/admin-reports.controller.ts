@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Query, UseGuards } from "@nestjs/common";
 import { Roles } from "../auth/roles.decorator";
 import { RolesGuard } from "../auth/roles.guard";
 import { SessionAuthGuard } from "../auth/session-auth.guard";
@@ -57,5 +57,18 @@ export class AdminReportsController {
   @Get("order-balance")
   getOrderBalance(@Query("date") date?: string) {
     return this.adminReports.getOrderBalance(date);
+  }
+
+  @Get("stop-loss")
+  getStopLoss() {
+    return this.adminReports.getStopLossReport();
+  }
+
+  @Patch("stop-loss/:userId")
+  updateStopLoss(
+    @Param("userId") userId: string,
+    @Body() body: { creditLimitToman?: string | number }
+  ) {
+    return this.adminReports.updateUserStopLoss(userId, body?.creditLimitToman ?? "");
   }
 }
