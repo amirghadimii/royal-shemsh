@@ -1,4 +1,4 @@
-:HL["/royal-shemsh/_next/static/css/878c027f1f7861b9.css","style"]
+:HL["/royal-shemsh/_next/static/css/00415e2bb7c2800c.css","style"]
 2:[["children",{"s":"__PAGE__","h":160}]]
 1:[["children",{"s":"gold-remittance","h":96,"c":"$Q2"}]]
-0:{"b":"J_ai1iyigTkTxTtMsTd8e","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"J_QR3TNABc1Fl1ANUtWKJ","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
