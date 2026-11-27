@@ -4,6 +4,8 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -56,6 +58,20 @@ export class AttachmentsController {
       req.user!,
       body ?? {},
       file
+    );
+    return { attachment };
+  }
+
+  @Patch(":id/status")
+  @UseGuards(RolesGuard)
+  @Roles("ADMIN", "SYSTEM_MANAGER")
+  async updateStatus(
+    @Param("id") id: string,
+    @Body() body: { status?: string }
+  ) {
+    const attachment = await this.attachmentsService.updateAttachmentStatus(
+      id,
+      body?.status ?? ""
     );
     return { attachment };
   }

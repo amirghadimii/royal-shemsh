@@ -236,6 +236,41 @@ export function Screen34Attachments() {
     }
   };
 
+  const handleAttachmentStatus = async (
+    attachmentId: string,
+    status: "APPROVED" | "REJECTED"
+  ) => {
+    const token =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("rs_session_token")
+        : null;
+    if (!token) return;
+    setUploadError(null);
+    setUploadNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/attachments/${attachmentId}/status`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setUploadError(err?.message ?? "خطا در تغییر وضعیت مدرک");
+        return;
+      }
+      setUploadNotice(
+        status === "APPROVED" ? "مدرک تایید شد." : "مدرک رد شد."
+      );
+      await loadAttachments(selectedUserId);
+    } catch {
+      setUploadError("خطا در ارتباط با سرور");
+    }
+  };
+
   return (
     <div className="min-h-dvh bg-bg-primary text-text-primary flex flex-col">
       <CustomLevel3Header />
@@ -384,6 +419,24 @@ export function Screen34Attachments() {
                       {new Date(att.uploadedAt).toLocaleDateString("fa-IR")}
                     </span>
                   </div>
+                  {isAdminSession ? (
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => void handleAttachmentStatus(att.id, "APPROVED")}
+                        className="flex-1 rounded-lg border border-buy/35 bg-buy-soft py-1.5 text-[10px] font-bold text-buy hover:bg-buy hover:text-white cursor-pointer"
+                      >
+                        تایید مدرک
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleAttachmentStatus(att.id, "REJECTED")}
+                        className="flex-1 rounded-lg border border-sell/35 bg-sell-soft py-1.5 text-[10px] font-bold text-sell hover:bg-sell hover:text-white cursor-pointer"
+                      >
+                        رد مدرک
+                      </button>
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </section>

@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { AttachmentDocType } from "@prisma/client";
+import { AttachmentDocType, AttachmentStatus } from "@prisma/client";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -166,6 +166,33 @@ export class AttachmentsService {
     return {
       ...created,
       docTypeLabel: DOC_TYPE_LABELS[created.docType],
+    };
+  }
+
+  async updateAttachmentStatus(id: string, statusRaw: string) {
+    const normalized = String(statusRaw ?? "").trim().toUpperCase();
+    if (
+      normalized !== AttachmentStatus.APPROVED &&
+      normalized !== AttachmentStatus.REJECTED &&
+      normalized !== AttachmentStatus.PENDING
+    ) {
+      throw new BadRequestException("وضعیت مدرک معتبر نیست");
+    }
+    const existing = await this.prisma.attachment.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException("مدرک یافت نشد");
+    }
+    const updated = await this.prisma.attachment.update({
+      where: { id },
+      data: { status: normalized as AttachmentStatus },
+      include: {
+        user: { select: { id: true, code: true, fullName: true, username: true } },
+        uploadedBy: { select: { id: true, fullName: true, username: true } },
+      },
+    });
+    return {
+      ...updated,
+      docTypeLabel: DOC_TYPE_LABELS[updated.docType],
     };
   }
 }

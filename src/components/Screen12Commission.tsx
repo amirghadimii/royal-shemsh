@@ -317,9 +317,9 @@ export function Screen12Commission() {
               </div>
 
               <div className="divide-y divide-border-subtle">
-                {group.members.map((member) => (
+                {group.members.map((member, idx) => (
                   <div
-                    key={member.name}
+                    key={`${member.name}-${idx}`}
                     className="flex items-center justify-between gap-2 py-2 text-[11px]"
                   >
                     <div>

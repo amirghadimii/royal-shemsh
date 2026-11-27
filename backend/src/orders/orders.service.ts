@@ -223,6 +223,35 @@ export class OrdersService implements OnModuleInit, OnModuleDestroy {
       .mul(unitPrice)
       .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
 
+    if (!isAdmin && side === TradeSide.BUY) {
+      const userRow = await this.prisma.user.findUnique({
+        where: { id: user.id },
+        select: { creditLimitToman: true },
+      });
+      if (userRow && userRow.creditLimitToman.gt(0)) {
+        const entries = await this.prisma.ledgerEntry.findMany({
+          where: { userId: user.id },
+          select: { entryType: true, rialAmount: true },
+        });
+        let rialBalance = new Prisma.Decimal(0);
+        for (const e of entries) {
+          if (e.entryType === LedgerEntryType.CREDIT) {
+            rialBalance = rialBalance.plus(e.rialAmount);
+          } else if (e.entryType === LedgerEntryType.DEBIT) {
+            rialBalance = rialBalance.minus(e.rialAmount);
+          }
+        }
+        const currentDebt = rialBalance.lt(0)
+          ? rialBalance.abs()
+          : new Prisma.Decimal(0);
+        if (currentDebt.plus(totalAmount).gt(userRow.creditLimitToman)) {
+          throw new BadRequestException(
+            "سقف حد ضرر / اعتبار شما تکمیل شده است؛ امکان ثبت سفارش خرید جدید وجود ندارد"
+          );
+        }
+      }
+    }
+
     const timeoutSec = Number(
       settingsMap.get("response_timeout_seconds") ?? "60"
     );
